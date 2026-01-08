@@ -1110,65 +1110,21 @@ html, body{
   padding-top: 10px;
   padding-bottom: 6px;
 }
-/* =========================
-   ROUTE TILES BACKGROUNDS
-   (based on totalAscentM)
-   0–39 flat, 40–99 hilly, 100+ mountain
-   ========================= */
-
-.route-item{
+/* ROUTE TILE BACKGROUNDS */
+.route-item.route-tile{
   position: relative;
   overflow: hidden;
-}
-
-/* background layer */
-.route-item::before{
-  content:"";
-  position:absolute;
-  inset:0;
   background-size: cover;
   background-position: center;
-  opacity: .55;              /* síla obrázku */
-  filter: saturate(1.05) contrast(1.05);
-  transform: scale(1.02);
-  z-index: 0;
 }
 
-/* dark glass overlay above image (so text stays readable) */
-.route-item::after{
-  content:"";
-  position:absolute;
-  inset:0;
-  background: linear-gradient(
-    180deg,
-    rgba(10,14,24,.55),
-    rgba(10,14,24,.70)
-  );
-  z-index: 1;
-}
+.route-item.route-tile.bg-flat{ background-image: url("img/tile-flat-1024x640.png"); }
+.route-item.route-tile.bg-hilly{ background-image: url("img/tile-hilly-1024x640.png"); }
+.route-item.route-tile.bg-mountain{ background-image: url("img/tile-mountain-1024x640.png"); }
 
-/* keep tile content above overlays */
-.route-item > *{
-  position: relative;
-  z-index: 2;
-}
-
-/* choose background by class */
-.route-item.route-flat::before{
-  background-image: url("assets/tiles/flat.png");
-}
-
-.route-item.route-hilly::before{
-  background-image: url("assets/tiles/hilly.png");
-}
-
-.route-item.route-mountain::before{
-  background-image: url("assets/tiles/mountain.png");
-}
-
-/* when ascent unknown (no GPX yet) – no image */
-.route-item.route-unknown::before{
-  background-image: none;
-  opacity: 0;
+/* aby text byl čitelný přes fotku */
+.route-item.route-tile .route-tile__inner{
+  background: linear-gradient(to top, rgba(0,0,0,.45), rgba(0,0,0,.18));
+  border-radius: inherit;
 }
 
