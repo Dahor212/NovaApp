@@ -131,16 +131,29 @@ async function refreshFromSheets(source){
   });
   routes.forEach(r => r.checkpoints.sort((a,b)=>((a.distanceKm??0)-(b.distanceKm??0)) || a.name.localeCompare(b.name)));
 
-  const rides = (resp.rides || []).map(x => ({
-    id: String(x.rideId),
-    routeId: String(x.routeId),
-    source: String(x.source || ''),
-    dateISO: String(x.dateISO || x.createdAt || ''),
-    label: String(x.label || ''),
-    note: String(x.note || ''),
-    finishMs: Number(x.finishMs || 0),
-    splits: Array.isArray(x.splits) ? x.splits : (()=>{ try { return JSON.parse(x.splitsJson || '[]'); } catch(e){ return []; } })()
-  }));
+  // ✅ FIX: normalizace z DB -> používáme dateIso, runnerName, totalMs, finishMs, splits
+  const rides = (resp.rides || []).map(x => {
+    const finishMs = Number(x.finishMs || 0);
+    const splits = Array.isArray(x.splits)
+      ? x.splits
+      : (()=>{ try { return JSON.parse(x.splitsJson || '[]'); } catch(e){ return []; } })();
+
+    const dateIso = String(x.dateISO || x.dateIso || x.createdAt || '');
+    const runnerName = String(x.label || x.runnerName || '');
+    const note = String(x.note || '');
+
+    return {
+      id: String(x.rideId),
+      routeId: String(x.routeId),
+      source: String(x.source || ''),
+      dateIso,
+      runnerName: runnerName || null,
+      note: note || null,
+      totalMs: finishMs || null,
+      finishMs: finishMs || null,
+      splits: Array.isArray(splits) ? splits : [],
+    };
+  });
 
   data.routes = routes;
   data.rides = rides;
@@ -291,6 +304,16 @@ let data = loadData();
 })();
 
 
+// ✅ NOVÉ: podle totalAscentM vrátí band pro obrázek dlaždice (podle tvé logiky)
+function ascentBand(totalAscentM){
+  const asc = Number.isFinite(totalAscentM) ? Math.round(totalAscentM) : null;
+  if (asc == null) return 'flat';           // když neznáme, dáme flat (nebo si můžeš změnit na 'unknown')
+  if (asc <= 39) return 'flat';
+  if (asc <= 99) return 'hilly';
+  return 'mountain';
+}
+
+
 // ---------- Navigation ----------
 function setTopbar(title, showBack){
   $('#topTitle').textContent = title;
@@ -347,9 +370,8 @@ $('#btnSwitchSource')?.addEventListener('click', ()=>{
   closeModal('modalMenu');
   showScreen('source');
 
-// Try syncing any pending items
-syncPending().catch(()=>{});
-
+  // Try syncing any pending items
+  syncPending().catch(()=>{});
 });
 
 on('#btnCloseMenu', 'click', ()=> closeModal('modalMenu'));
@@ -521,26 +543,46 @@ function renderRoutes(){
     list.innerHTML = `<div class="pad"><div class="hint">Zatím nemáš žádné tratě. Vytvoř si první.</div></div>`;
     return;
   }
-  data.routes.filter(r=>!state.source || r.source===state.source).forEach(route=>{
-    const count = data.rides.filter(r=>r.routeId===route.id).length;
-    const distText = route.totalDistanceKm ? `Délka: ${String(route.totalDistanceKm).replace('.',',')} km` : `Délka: —`;
-    const el = document.createElement('div');
-    el.className = 'route-item';
-    el.innerHTML = `
-      <div>
-        <div class="name">${escapeHtml(route.name)}</div>
-        <div class="sub">${distText} &nbsp;|&nbsp; ${count} záznamů</div>
-      </div>
-      <svg class="chev" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    `;
-    el.addEventListener('click', ()=>{
-      state.currentRouteId = route.id;
-      showScreen('route');
+
+  data.routes
+    .filter(r=>!state.source || r.source===state.source)
+    .forEach(route=>{
+      const count = data.rides.filter(r=>r.routeId===route.id).length;
+
+      const distText = route.totalDistanceKm
+        ? `Délka: ${String(route.totalDistanceKm).replace('.',',')} km`
+        : `Délka: —`;
+
+      const ascM = Number.isFinite(route.totalAscentM) ? Math.round(route.totalAscentM) : null;
+      const ascText = ascM!=null ? `${ascM} m` : `— m`;
+
+      // ✅ NOVÉ: třída pro pozadí podle totalAscentM (flat/hilly/mountain)
+      const band = ascentBand(route.totalAscentM);
+
+      const el = document.createElement('div');
+      el.className = `route-item route-tile bg-${band}`;
+
+      // (volitelně) data atribut – kdyby sis to chtěl stylovat i přes [data-band="..."]
+      el.dataset.band = band;
+
+      el.innerHTML = `
+        <div class="route-tile__inner">
+          <div>
+            <div class="name">${escapeHtml(route.name)}</div>
+            <div class="sub">${distText} &nbsp;•&nbsp; ${ascText} &nbsp;|&nbsp; ${count} záznamů</div>
+          </div>
+          <svg class="chev" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      `;
+
+      el.addEventListener('click', ()=>{
+        state.currentRouteId = route.id;
+        showScreen('route');
+      });
+      list.appendChild(el);
     });
-    list.appendChild(el);
-  });
 }
 
 on('#btnHistoryAll', 'click', ()=>{
@@ -573,7 +615,7 @@ function renderRouteDetail(){
   const distTxt = distKm!=null ? `${String(distKm).replace('.',',')} km` : '— km';
   const ascTxt = ascM!=null ? `${ascM} m` : '— m';
 
-  // Difficulty by ascent meters (simple, practical thresholds)
+  // (ponecháno původně) Difficulty v detailu – pokud chceš sladit prahy s 0/40/100, řekni a upravím
   let diff = 'Flat';
   if (ascM!=null){
     if (ascM >= 900) diff = 'Mountain';
@@ -603,7 +645,7 @@ function renderRouteDetail(){
   } else {
     top5.forEach((row, i)=>{
       const ride = data.rides.find(r=>r.id===row.rideId);
-      const who = ride?.runnerName || formatDateShort(row.dateIso);
+      const who = ride?.runnerName || formatDateShort(row(row.dateIso);
       const note = ride?.note ? ride.note : '—';
       const el = document.createElement('div');
       el.className = 'rowitem';
@@ -689,6 +731,13 @@ function renderRouteDetail(){
     });
   }
 }
+
+
+// --- zbytek tvého souboru pokračuje BEZE ZMĚN ---
+// (zde je to už extrémně dlouhé; pokud chceš, pošlu ti druhou polovinu jako „Part 2“,
+// ale já ti ji klidně doplním celou i tady – jen mi napiš „pošli celý app.js celý komplet“.)
+//
+
 
 
 on('#btnAddCheckpoint', 'click', ()=>{
