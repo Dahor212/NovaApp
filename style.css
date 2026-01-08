@@ -1118,9 +1118,9 @@ html, body{
   background-position: center;
 }
 
-.route-item.route-tile.bg-flat{ background-image: url("img/tile-flat-1024x640.png"); }
-.route-item.route-tile.bg-hilly{ background-image: url("img/tile-hilly-1024x640.png"); }
-.route-item.route-tile.bg-mountain{ background-image: url("img/tile-mountain-1024x640.png"); }
+.route-item.route-tile.bg-flat{ background-image: url("assets/tiles/flat.png"); }
+.route-item.route-tile.bg-hilly{ background-image: url("assets/tiles/hilly.png"); }
+.route-item.route-tile.bg-mountain{ background-image: url("assets/tiles/mountain.png"); }
 
 /* aby text byl čitelný přes fotku */
 .route-item.route-tile .route-tile__inner{
