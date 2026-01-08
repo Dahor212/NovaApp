@@ -1024,4 +1024,90 @@ html, body{
     height: 155px !important;
   }
 }
+/* =====================================================
+   KROK 3.1 – TUNING SOURCE CARDS (premium look)
+===================================================== */
+
+/* Karty víc "app-like": větší, výš, víc prostoru */
+#screenSource .pad:first-child{
+  padding-top: 10px;
+}
+
+.source-cards{
+  margin-top: 6px;
+  gap: 16px;
+}
+
+/* větší karta + lepší radius */
+.source-card{
+  height: 190px !important;
+  border-radius: 26px;
+  box-shadow:
+    0 22px 65px rgba(0,0,0,.55),
+    0 0 0 1px rgba(255,255,255,.10) inset;
+}
+
+/* jemný "shine" efekt, aby karta působila živě */
+.source-card .source-card__label{
+  border-radius: 18px;
+}
+
+/* horní barevná linka – trochu výraznější */
+.source-card::after{
+  height: 5px;
+  opacity: 1;
+}
+
+/* ztmavení dole (lepší čitelnost + “depth”) */
+.source-card::before{
+  background: linear-gradient(
+    to bottom,
+    rgba(0,0,0,.06),
+    rgba(0,0,0,.12) 45%,
+    rgba(0,0,0,.55)
+  );
+}
+
+/* label menší a níž */
+.source-card{
+  align-items: flex-end;
+  padding: 14px;
+}
+
+.source-card__label{
+  padding: 10px 0;
+  font-size: 15px;
+  width: 82%;
+  max-width: 220px;
+
+  background: rgba(20, 25, 40, 0.45);
+  border: 1px solid rgba(255,255,255,.16);
+}
+
+/* tap/press efekt – víc iOS */
+.source-card:active{
+  transform: scale(.985);
+  box-shadow:
+    0 18px 55px rgba(0,0,0,.45),
+    0 0 0 1px rgba(255,255,255,.10) inset;
+}
+
+/* na malých iPhone displejích ať se to nerozbije */
+@media (max-width: 380px){
+  .source-card{
+    height: 175px !important;
+  }
+  .source-card__label{
+    width: 88%;
+  }
+}
+/* SOURCE screen – lepší vertikální kompozice */
+#screenSource{
+  padding-bottom: 12px;
+}
+
+#screenSource .pad:last-child{
+  padding-top: 10px;
+  padding-bottom: 6px;
+}
 
