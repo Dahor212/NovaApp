@@ -1,0 +1,1946 @@
+// SplitTimer Clean v26
+function on(sel, evt, fn){
+  const el = document.querySelector(sel);
+  if (el) el.addEventListener(evt, fn);
+}
+// SplitTimer PWA (no build tools). Data stored locally in localStorage.
+// Features: routes, checkpoints, GPX import (profile), ride timer, results, leaderboard, export/import.
+
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+const SCREENS = {
+  source: $('#screenSource'),
+  routes: $('#screenRoutes'),
+  route: $('#screenRouteDetail'),
+  ride: $('#screenRide'),
+};
+
+const state = {
+  screen: 'source',
+  source: null, // 'Zwift' | 'Kinomap'
+
+  currentRouteId: null,
+  ride: null, // {routeId, startMs, running, marks:[{cpId, ms}], stoppedMs}
+};
+
+const STORAGE_KEY = 'splittimer:data:v1';
+const SOURCE_KEY = 'splittimer:source:v1';
+
+// ===== Google Sheets Sync (JSONP to avoid CORS) =====
+const SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbwaBWzuDwfU6-xQ4tLjEUSCnaMpvoQBsulvp11wtRokx3xIVsJ3_MZMGp3TRe2_q5KmcQ/exec';
+const SHEETS_API_SECRET = 'st_pRrN8e6Lgkh2A5SThDEKpek4qZZL_0pr';
+const APP_VERSION = 'pwa-v26-sheets-db';
+const PENDING_KEY = 'splittimer:pendingSync:v1';
+
+function getDeviceId(){
+  let id = localStorage.getItem('splittimer:deviceId:v1');
+  if(!id){
+    id = 'dev_' + Math.random().toString(16).slice(2) + '_' + Date.now();
+    localStorage.setItem('splittimer:deviceId:v1', id);
+  }
+  return id;
+}
+
+function loadPending(){
+  try {
+    return JSON.parse(localStorage.getItem(PENDING_KEY) || '[]');
+  } catch(e) {
+    return [];
+  }
+}
+function savePending(list){
+  localStorage.setItem(PENDING_KEY, JSON.stringify(list));
+}
+function queueRideForSync(ride){
+  const list = loadPending();
+  // de-dup by ride.id
+  if(!list.some(x=>x && x.type==='ride' && x.rideId===ride.id)){
+    list.push({ type:'ride', rideId: ride.id, ts: Date.now() });
+    savePending(list);
+  }
+}
+
+function sheetsJsonp(action, payload) {
+  return new Promise((resolve, reject) => {
+    const cbName = 'st_cb_' + Math.random().toString(36).slice(2);
+    let script = null;
+
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error('Sheets timeout'));
+    }, 15000);
+
+    function cleanup(){
+      clearTimeout(timer);
+      try { delete window[cbName]; } catch(e){ window[cbName] = undefined; }
+      if (script && script.parentNode) script.parentNode.removeChild(script);
+    }
+
+    window[cbName] = (resp) => {
+      cleanup();
+      if (!resp || resp.ok !== true) {
+        reject(new Error((resp && resp.error) ? resp.error : 'Sheets error'));
+        return;
+      }
+      resolve(resp);
+    };
+
+    const payloadStr = encodeURIComponent(JSON.stringify(payload || {}));
+    const url =
+      SHEETS_API_URL +
+      '?callback=' + encodeURIComponent(cbName) +
+      '&secret=' + encodeURIComponent(SHEETS_API_SECRET) +
+      '&action=' + encodeURIComponent(action) +
+      '&payload=' + payloadStr;
+
+    script = document.createElement('script');
+    script.src = url;
+    script.async = true;
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('Sheets network error'));
+    };
+    document.body.appendChild(script);
+  });
+}
+
+async function refreshFromSheets(source){
+  const src = source || state.source || loadSource() || '';
+  const resp = await sheetsJsonp('getAll', { source: src });
+
+  const routes = (resp.routes || []).map(r => ({
+    id: String(r.routeId),
+    source: String(r.source || ''),
+    name: String(r.name || ''),
+    totalDistanceKm: (r.totalDistanceKm === '' || r.totalDistanceKm == null) ? null : Number(r.totalDistanceKm),
+    totalAscentM: (r.totalAscentM === '' || r.totalAscentM == null) ? null : Number(r.totalAscentM),
+    difficulty: String(r.difficulty || ''),
+    checkpoints: [],
+    profile: []
+  }));
+  const byId = new Map(routes.map(r => [r.id, r]));
+  (resp.checkpoints || []).forEach(c => {
+    const route = byId.get(String(c.routeId));
+    if (!route) return;
+    route.checkpoints.push({
+      id: String(c.checkpointId),
+      name: String(c.name || ''),
+      distanceKm: (c.distanceKm === '' || c.distanceKm == null) ? null : Number(c.distanceKm),
+    });
+  });
+  routes.forEach(r => r.checkpoints.sort((a,b)=>((a.distanceKm??0)-(b.distanceKm??0)) || a.name.localeCompare(b.name)));
+
+  const rides = (resp.rides || []).map(x => ({
+    id: String(x.rideId),
+    routeId: String(x.routeId),
+    source: String(x.source || ''),
+    dateISO: String(x.dateISO || x.createdAt || ''),
+    label: String(x.label || ''),
+    note: String(x.note || ''),
+    finishMs: Number(x.finishMs || 0),
+    splits: Array.isArray(x.splits) ? x.splits : (()=>{ try { return JSON.parse(x.splitsJson || '[]'); } catch(e){ return []; } })()
+  }));
+
+  data.routes = routes;
+  data.rides = rides;
+  saveData(); // cache mirrors DB
+  return { routesCount: routes.length, ridesCount: rides.length };
+}
+
+async function syncRideToSheets(rideId){
+  const ride = data.rides.find(r=>r.id===rideId);
+  if(!ride) return;
+
+  const route = data.routes.find(r=>r.id===ride.routeId);
+  if(!route) return;
+
+  // Upsert route
+  await sheetsJsonp('upsertRoute', {
+    routeId: route.id,
+    source: route.source || state.source || '',
+    name: route.name || '',
+    totalDistanceKm: route.totalDistanceKm ?? '',
+    totalAscentM: route.totalAscentM ?? '',
+    difficulty: route.difficulty || ''
+  });
+
+  // Replace checkpoints
+  await sheetsJsonp('replaceCheckpoints', {
+    routeId: route.id,
+    checkpoints: (route.checkpoints || []).map((cp, idx)=>({
+      checkpointId: cp.id || ('cp' + (idx+1)),
+      order: idx+1,
+      name: cp.name || '',
+      distanceKm: (cp.distanceKm ?? '')
+    }))
+  });
+
+  // Insert ride
+  await sheetsJsonp('insertRide', {
+    rideId: ride.id,
+    routeId: route.id,
+    source: route.source || state.source || '',
+    dateISO: ride.dateIso || new Date().toISOString(),
+    label: ride.runnerName || '',
+    note: ride.note || '',
+    finishMs: ride.finishMs ?? ride.totalMs ?? 0,
+    splits: Array.isArray(ride.splits) ? ride.splits : [],
+    deviceId: getDeviceId(),
+    appVersion: APP_VERSION
+  });
+}
+
+async function syncPending() {
+  if (!navigator.onLine) return;
+  const list = loadPending();
+  if (!list.length) return;
+
+  // process sequentially
+  const remain = [];
+  for (const item of list) {
+    if (!item || item.type!=='ride' || !item.rideId) continue;
+    try {
+      await syncRideToSheets(item.rideId);
+    } catch (e) {
+      // keep for later retry
+      remain.push(item);
+    }
+  }
+  savePending(remain);
+}
+
+window.addEventListener('online', ()=>{ syncPending().catch(()=>{}); });
+
+
+function nowMs(){ return performance.now(); }
+function pad2(n){ return String(n).padStart(2,'0'); }
+function formatTime(ms){
+  const s = Math.max(0, Math.floor(ms/1000));
+  const h = Math.floor(s/3600);
+  const m = Math.floor((s%3600)/60);
+  const sec = s%60;
+  return `${pad2(h)}:${pad2(m)}:${pad2(sec)}`;
+}
+function formatSigned(ms){
+  const sign = ms < 0 ? '-' : '+';
+  return sign + formatTimeShort(Math.abs(ms));
+}
+
+function formatTimeShort(ms){
+  const s = Math.max(0, Math.floor(ms/1000));
+  const h = Math.floor(s/3600);
+  const m = Math.floor((s%3600)/60);
+  const sec = s%60;
+  return h>0 ? `${h}:${pad2(m)}:${pad2(sec)}` : `${m}:${pad2(sec)}`;
+}
+function formatKm(km){
+  if (km === null || km === undefined || Number.isNaN(km)) return '';
+  const v = Math.round(km*10)/10;
+  return `${v.toFixed(v % 1 === 0 ? 0 : 1)} km`;
+}
+
+function uid(){ return crypto.randomUUID ? crypto.randomUUID() : (Date.now().toString(36)+Math.random().toString(36).slice(2)); }
+
+function loadData(){
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw){
+    return { routes: [], rides: [] };
+  }
+  try {
+    const obj = JSON.parse(raw);
+    // ensure shape
+    return {
+      routes: Array.isArray(obj.routes) ? obj.routes : [],
+      rides: Array.isArray(obj.rides) ? obj.rides : []
+    };
+  } catch(e){
+    return { routes: [], rides: [] };
+  }
+}
+
+function saveData(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+
+
+function loadSource(){
+  const s = localStorage.getItem(SOURCE_KEY);
+  return (s === 'Zwift' || s === 'Kinomap') ? s : null;
+}
+function saveSource(s){
+  localStorage.setItem(SOURCE_KEY, s);
+  state.source = s;
+  const lbl = $('#currentSourceLabel');
+  if (lbl) lbl.textContent = s ?? '—';
+}
+
+let data = loadData();
+
+// Migration: ensure every route has source
+(function migrate(){
+  let changed = false;
+  for (const r of data.routes){
+    if (r.source !== 'Zwift' && r.source !== 'Kinomap'){
+      r.source = state.source || 'Zwift';
+      changed = true;
+    }
+    if (!('totalAscentM' in r)) { r.totalAscentM = null; changed = true; }
+    if (!Array.isArray(r.profile)) { r.profile = []; changed = true; }
+    if (!Array.isArray(r.checkpoints)) { r.checkpoints = []; changed = true; }
+  }
+  if (changed) saveData();
+})();
+
+
+// ---------- Navigation ----------
+function setTopbar(title, showBack){
+  $('#topTitle').textContent = title;
+  $('#btnBack').hidden = !showBack;
+}
+function showScreen(name){
+  try{ window.scrollTo(0,0); document.documentElement.scrollTop=0; document.body.scrollTop=0; }catch(e){}
+  state.screen = name;
+  for (const [k, el] of Object.entries(SCREENS)){
+    el.hidden = (k !== name);
+  }
+  if (name === 'source'){
+    setTopbar('Vyber zdroj', false);
+    updateSourceUi();
+  }
+  if (name === 'routes'){
+    setTopbar('Moje Trasy', false);
+    renderRoutes();
+  }
+  if (name === 'route'){
+    setTopbar(getCurrentRoute()?.name ?? 'Trať', true);
+    renderRouteDetail();
+  }
+  if (name === 'ride'){
+    try{ window.scrollTo(0,0); }catch(e){}
+    setTopbar(`Jízda: ${getCurrentRoute()?.name ?? ''}`.trim(), true);
+    renderRide();
+  }
+}
+
+on('#btnBack', 'click', ()=>{
+  if (state.screen === 'source'){
+    return;
+  }
+  if (state.screen === 'ride'){
+    // back to route detail
+    showScreen('route');
+  } else if (state.screen === 'route'){
+    showScreen('routes');
+  }
+});
+
+// Menu
+on('#btnMenu', 'click', ()=> { updateSourceUi(); openModal('modalMenu'); });
+
+function updateSourceUi(){
+  const s = state.source ?? loadSource();
+  const lbl = $('#currentSourceLabel');
+  if (lbl) lbl.textContent = s ?? '—';
+}
+
+
+$('#btnSwitchSource')?.addEventListener('click', ()=>{
+  closeModal('modalMenu');
+  showScreen('source');
+
+// Try syncing any pending items
+syncPending().catch(()=>{});
+
+});
+
+on('#btnCloseMenu', 'click', ()=> closeModal('modalMenu'));
+
+// Close modals by backdrop
+$$('.backdrop').forEach(b=>{
+  b.addEventListener('click', (e)=>{
+    const id = e.target.getAttribute('data-close');
+    if (id) closeModal(id);
+  });
+});
+$$('[data-close]').forEach(btn=>{
+  const id = btn.getAttribute('data-close');
+  if (btn.classList.contains('backdrop')) return;
+  btn.addEventListener('click', ()=> closeModal(id));
+});
+
+function openModal(id){ $('#'+id).hidden = false; }
+function closeModal(id){ $('#'+id).hidden = true; }
+
+
+function bindTap(el, fn){
+  if (!el) return;
+  const handler = (e)=>{
+    // On iOS, touch can prevent click; handle both safely
+    try{ e.preventDefault?.(); }catch(_){}
+    try{ e.stopPropagation?.(); }catch(_){}
+    fn(e);
+  };
+  el.addEventListener('click', handler, {capture:true});
+  el.addEventListener('touchend', handler, {capture:true, passive:false});
+  el.addEventListener('pointerup', handler, {capture:true});
+}
+
+
+function bindTapSelector(selector, fn){
+  const handler = (e)=>{
+    const t = e.target && e.target.closest ? e.target.closest(selector) : null;
+    if (!t) return;
+    try{ e.preventDefault?.(); }catch(_){}
+    try{ e.stopPropagation?.(); }catch(_){}
+    fn(e, t);
+  };
+  document.addEventListener('click', handler, {capture:true});
+  document.addEventListener('touchend', handler, {capture:true, passive:false});
+  document.addEventListener('pointerup', handler, {capture:true});
+}
+
+function wireModalGuards(){
+  // Prevent clicks inside sheets from closing the modal on iOS Safari (event bubbling quirks)
+  document.querySelectorAll('.modal .sheet').forEach(sheet=>{
+    sheet.addEventListener('click', (e)=> e.stopPropagation());
+    sheet.addEventListener('pointerdown', (e)=> e.stopPropagation());
+    sheet.addEventListener('touchstart', (e)=> e.stopPropagation(), {passive:true});
+  });
+  // Backdrop closes modal (only)
+  document.querySelectorAll('.modal').forEach(modal=>{
+    modal.addEventListener('click', (e)=>{
+      // if click is on modal container (backdrop area), close
+      if (e.target === modal){
+        modal.hidden = true;
+      }
+    });
+  });
+}
+
+wireModalGuards();
+
+document.querySelectorAll('[data-close]').forEach(el=>{
+  el.addEventListener('click', ()=>{
+    const id = el.getAttribute('data-close');
+    closeModal(id);
+  });
+});
+
+
+// Robust iOS tap bindings (delegated)
+bindTapSelector('#btnPickZwift', async ()=>{
+  saveSource('Zwift');
+  showToast('Načítám trasy z databáze…');
+  try{ await refreshFromSheets('Zwift'); }catch(e){ console.warn(e); showToast('Nepodařilo se načíst DB – zobrazuji lokální cache'); }
+  showScreen('routes');
+  window.scrollTo(0,0);
+});
+bindTapSelector('#btnPickKinomap', async ()=>{
+  saveSource('Kinomap');
+  showToast('Načítám trasy z databáze…');
+  try{ await refreshFromSheets('Kinomap'); }catch(e){ console.warn(e); showToast('Nepodařilo se načíst DB – zobrazuji lokální cache'); }
+  showScreen('routes');
+  window.scrollTo(0,0);
+});
+
+bindTapSelector('#btnStartRide', ()=>{
+  const route = getCurrentRoute();
+  if (!route) return;
+  try{
+    startRide(route.id);
+    showScreen('ride');
+  }catch(e){
+    console.error(e);
+    alert('Nepodařilo se spustit měření. Zkus stránku obnovit (refresh).');
+  }
+});
+
+bindTapSelector('#btnRouteLeaderboard', ()=>{
+  showLeaderboard(state.currentRouteId);
+});
+
+bindTapSelector('#btnSegmentLeaderboard', ()=>{
+  showSegmentLeaderboard();
+});
+
+// ---------- Routes list ----------
+on('#btnCreateRoute', 'click', ()=>{
+  $('#newRouteName').value = '';
+  $('#newRouteDistance').value = '';
+  $('#newRouteSource').value = state.source || 'Zwift';
+  openModal('modalCreateRoute');
+});
+on('#btnCreateRouteConfirm', 'click', async ()=>{
+  const name = $('#newRouteName').value.trim();
+  if (!name) return alert('Zadej název tratě.');
+  const dist = parseFloat(String($('#newRouteDistance').value).replace(',','.'));
+  const source = ($('#newRouteSource')?.value) || state.source || 'Zwift';
+
+  const route = {
+    id: uid(),
+    source,
+    name,
+    totalDistanceKm: Number.isFinite(dist) ? dist : null,
+    totalAscentM: null,
+    checkpoints: [],
+    profile: []
+  };
+
+  // Optimistic UI update
+  data.routes.unshift(route);
+  saveData();
+  closeModal('modalCreateRoute');
+  renderRoutes();
+
+  // Persist to DB immediately (DB is source of truth)
+  try{
+    await sheetsJsonp('upsertRoute', {
+      routeId: route.id,
+      source: route.source,
+      name: route.name,
+      totalDistanceKm: route.totalDistanceKm ?? '',
+      totalAscentM: route.totalAscentM ?? '',
+      difficulty: route.difficulty || ''
+    });
+    await sheetsJsonp('replaceCheckpoints', {
+      routeId: route.id,
+      checkpoints: []
+    });
+    await refreshFromSheets(state.source);
+    renderRoutes();
+    showToast('Trať uložena do databáze');
+  }catch(e){
+    console.warn(e);
+    showToast('Nepodařilo se uložit do DB – zůstává jen lokálně');
+  }
+});
+
+function renderRoutes(){
+  const list = $('#routesList');
+  list.innerHTML = '';
+  if (!data.routes.length){
+    list.innerHTML = `<div class="pad"><div class="hint">Zatím nemáš žádné tratě. Vytvoř si první.</div></div>`;
+    return;
+  }
+  data.routes.filter(r=>!state.source || r.source===state.source).forEach(route=>{
+    const count = data.rides.filter(r=>r.routeId===route.id).length;
+    const distText = route.totalDistanceKm ? `Délka: ${String(route.totalDistanceKm).replace('.',',')} km` : `Délka: —`;
+    const el = document.createElement('div');
+    el.className = 'route-item';
+    el.innerHTML = `
+      <div>
+        <div class="name">${escapeHtml(route.name)}</div>
+        <div class="sub">${distText} &nbsp;|&nbsp; ${count} záznamů</div>
+      </div>
+      <svg class="chev" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    `;
+    el.addEventListener('click', ()=>{
+      state.currentRouteId = route.id;
+      showScreen('route');
+    });
+    list.appendChild(el);
+  });
+}
+
+on('#btnHistoryAll', 'click', ()=>{
+  showLeaderboard(null);
+});
+
+// ---------- Route detail ----------
+function getCurrentRoute(){
+  return data.routes.find(r=>r.id===state.currentRouteId) || null;
+}
+function updateRoute(route){
+  const idx = data.routes.findIndex(r=>r.id===route.id);
+  if (idx>=0){
+    data.routes[idx] = route;
+    saveData();
+  }
+}
+
+function renderRouteDetail(){
+  const route = getCurrentRoute();
+  if (!route){ showScreen('routes'); return; }
+
+  // Header
+  $('#routeName').textContent = route.name || 'Trať';
+  const _btnStart = $('#btnStartRide'); if (_btnStart) _btnStart.dataset.routeId = route.id;
+
+  const distKm = Number.isFinite(route.totalDistanceKm) ? route.totalDistanceKm : null;
+  const ascM = Number.isFinite(route.totalAscentM) ? Math.round(route.totalAscentM) : null;
+
+  const distTxt = distKm!=null ? `${String(distKm).replace('.',',')} km` : '— km';
+  const ascTxt = ascM!=null ? `${ascM} m` : '— m';
+
+  // Difficulty by ascent meters (simple, practical thresholds)
+  let diff = 'Flat';
+  if (ascM!=null){
+    if (ascM >= 900) diff = 'Mountain';
+    else if (ascM >= 350) diff = 'Hilly';
+    else diff = 'Flat';
+  } else {
+    diff = '—';
+  }
+
+  $('#routeStats').innerHTML = `${distTxt}  •  <span class="difficon">${svgDifficulty(diff)}<span>${diff}</span></span>  •  ${ascTxt}`;
+
+  // Best time
+  const fin = getFinishLeaderboard(route);
+  const bestMs = fin.length ? fin[0].t : null;
+  $('#routeBest').textContent = `Nejlepší čas: ${bestMs!=null ? formatTimeShort(bestMs) : '—'}`;
+
+  // Profile
+  drawProfile(route);
+
+  // Top 5
+  const top5 = fin.slice(0,5);
+  $('#top5Count').textContent = String(top5.length);
+  const top5List = $('#top5List');
+  top5List.innerHTML = '';
+  if (!top5.length){
+    top5List.innerHTML = ``;
+  } else {
+    top5.forEach((row, i)=>{
+      const ride = data.rides.find(r=>r.id===row.rideId);
+      const who = ride?.runnerName || formatDateShort(row.dateIso);
+      const note = ride?.note ? ride.note : '—';
+      const el = document.createElement('div');
+      el.className = 'rowitem';
+      el.innerHTML = `
+        <div class="l">
+          <div class="t">${i<3 ? `<span class="medal">${svgRibbon(i+1)}</span>` : ``}#${i+1}  ${escapeHtml(who)}</div>
+          <div class="s">${escapeHtml(note)}</div>
+        </div>
+        <div class="r">${formatTimeShort(row.t)}</div>
+      `;
+      top5List.appendChild(el);
+    });
+  }
+
+  // Last 3 (by date)
+  const rides = getRidesForRoute(route.id).slice().sort((a,b)=> new Date(b.dateIso) - new Date(a.dateIso));
+  const last3 = rides.slice(0,3);
+  $('#last3Count').textContent = String(last3.length);
+  const last3List = $('#last3List');
+  last3List.innerHTML = '';
+  if (!last3.length){
+    last3List.innerHTML = ``;
+  } else {
+    last3.forEach((r)=>{
+      const who = r.runnerName || formatDateShort(r.dateIso);
+      const note = r.note ? r.note : '—';
+      const el = document.createElement('div');
+      el.className = 'rowitem';
+      el.innerHTML = `
+        <div class="l">
+          <div class="t">${escapeHtml(who)}</div>
+          <div class="s">${escapeHtml(note)}</div>
+        </div>
+        <div class="r">${formatTimeShort(r.totalMs)}</div>
+      `;
+      last3List.appendChild(el);
+    });
+  }
+
+  // Checkpoints list (editable)
+  const cpList = $('#checkpointList');
+  cpList.innerHTML = '';
+  if (!route.checkpoints.length){
+    cpList.innerHTML = ``;
+  } else {
+    route.checkpoints.forEach((cp, idx)=>{
+      const el = document.createElement('div');
+      el.className = 'cp-row';
+      const km = Number.isFinite(cp.distanceKm) ? `${String(cp.distanceKm).replace('.',',')} km` : '';
+      el.innerHTML = `
+        <div class="cp-dot" style="background:${escapeHtml(cp.color||'#7c8db1')}"></div>
+        <div class="cp-main">
+          <div class="cp-name">${escapeHtml(cp.name || `CP${idx+1}`)}</div>
+          <div class="cp-sub">${km}</div>
+        </div>
+        <div class="cp-actions">
+          <button class="cp-mini" data-act="up" ${idx===0?'disabled':''}>↑</button>
+          <button class="cp-mini" data-act="down" ${idx===route.checkpoints.length-1?'disabled':''}>↓</button>
+          <button class="cp-mini danger" data-act="del">Smazat</button>
+        </div>
+      `;
+      el.querySelectorAll('button').forEach(btn=>{
+        btn.addEventListener('click', (ev)=>{
+          ev.stopPropagation();
+          const act = btn.dataset.act;
+          const i = idx;
+          if (act==='del'){
+            if (!confirm('Smazat checkpoint?')) return;
+            route.checkpoints.splice(i,1);
+            updateRoute(route); renderRouteDetail(); return;
+          }
+          if (act==='up' && i>0){
+            const tmp = route.checkpoints[i-1]; route.checkpoints[i-1]=route.checkpoints[i]; route.checkpoints[i]=tmp;
+            updateRoute(route); renderRouteDetail(); return;
+          }
+          if (act==='down' && i<route.checkpoints.length-1){
+            const tmp = route.checkpoints[i+1]; route.checkpoints[i+1]=route.checkpoints[i]; route.checkpoints[i]=tmp;
+            updateRoute(route); renderRouteDetail(); return;
+          }
+        });
+      });
+      cpList.appendChild(el);
+    });
+  }
+}
+
+
+on('#btnAddCheckpoint', 'click', ()=>{
+  $('#cpName').value = '';
+  $('#cpDistance').value = '';
+  openModal('modalAddCheckpoint');
+});
+on('#btnAddCheckpointConfirm', 'click', ()=>{
+  const route = getCurrentRoute(); if (!route) return;
+  const name = $('#cpName').value.trim();
+  if (!name) return alert('Zadej název checkpointu.');
+  const dist = parseFloat(String($('#cpDistance').value).replace(',','.'));
+  route.checkpoints.push({
+    id: uid(),
+    name,
+    distanceKm: Number.isFinite(dist) ? dist : null
+  });
+  updateRoute(route);
+  closeModal('modalAddCheckpoint');
+  renderRouteDetail();
+});
+
+on('#btnImportGpx', 'click', ()=> openModal('modalImportGpx'));
+on('#fileGpx', 'change', async (e)=>{
+  const file = e.target.files?.[0];
+  if (!file) return;
+  try{
+    const text = await file.text();
+    const parsed = parseGpx(text);
+    const route = getCurrentRoute(); if (!route) return;
+
+    route.profile = downsampleProfile(parsed.profile, 350);
+    route.totalDistanceKm = round2(parsed.totalDistanceKm);
+    route.totalAscentM = Math.round(parsed.totalAscentM);
+
+    // If there is no Start/Cíl, suggest them (don't overwrite user's checkpoints)
+    if (route.checkpoints.length === 0){
+      route.checkpoints = [
+        {id: uid(), name:'Start', distanceKm:0},
+        {id: uid(), name:'Vrchol', distanceKm: round2(route.totalDistanceKm*0.5)},
+        {id: uid(), name:'Cíl', distanceKm: route.totalDistanceKm}
+      ];
+    }
+
+    updateRoute(route);
+    closeModal('modalImportGpx');
+    renderRouteDetail();
+    alert('GPX import hotový ✅');
+  }catch(err){
+    console.error(err);
+    alert('Nepodařilo se importovat GPX. Zkus jiný soubor.');
+  } finally {
+    $('#fileGpx').value = '';
+  }
+});
+
+const _btnEditRoute = $('#btnEditRoute'); if(_btnEditRoute) _btnEditRoute.addEventListener('click', ()=>{
+  const route = getCurrentRoute(); if (!route) return;
+  $('#editRouteSource').value = route.source || (state.source||'Zwift');
+  $('#editRouteName').value = route.name;
+  $('#editRouteDistance').value = route.totalDistanceKm ?? '';
+  openModal('modalEditRoute');
+});
+on('#btnEditRouteSave', 'click', async ()=>{
+  const route = getCurrentRoute(); if (!route) return;
+  const name = $('#editRouteName').value.trim();
+  if (!name) return alert('Zadej název.');
+  const dist = parseFloat(String($('#editRouteDistance').value).replace(',','.'));
+  const source = ($('#editRouteSource')?.value) || route.source || state.source || 'Zwift';
+
+  route.name = name;
+  route.source = source;
+  route.totalDistanceKm = Number.isFinite(dist) ? dist : null;
+
+  saveData();
+  closeModal('modalEditRoute');
+  if (state.currentScreen === 'routes'){
+    renderRoutes();
+  } else {
+    renderRouteDetail();
+  }
+
+  // Persist changes to DB
+  try{
+    await sheetsJsonp('upsertRoute', {
+      routeId: route.id,
+      source: route.source,
+      name: route.name,
+      totalDistanceKm: route.totalDistanceKm ?? '',
+      totalAscentM: route.totalAscentM ?? '',
+      difficulty: route.difficulty || ''
+    });
+    await sheetsJsonp('replaceCheckpoints', {
+      routeId: route.id,
+      checkpoints: (route.checkpoints || []).map((cp, idx)=>({
+        checkpointId: cp.id,
+        order: idx+1,
+        name: cp.name || '',
+        distanceKm: cp.distanceKm ?? ''
+      }))
+    });
+    await refreshFromSheets(state.source);
+    if (state.currentScreen === 'routes'){
+      renderRoutes();
+    } else {
+      renderRouteDetail();
+    }
+    showToast('Změny uloženy do databáze');
+  }catch(e){
+    console.warn(e);
+    showToast('Nepodařilo se uložit změny do DB');
+  }
+});
+on('#btnDeleteRoute', 'click', async ()=>{
+  const route = getCurrentRoute(); if (!route) return;
+  if (!confirm('Opravdu smazat celou trať včetně historie jízd?')) return;
+
+  // Optimistic local removal
+  data.routes = data.routes.filter(r=>r.id!==route.id);
+  data.rides = data.rides.filter(r=>r.routeId!==route.id);
+  saveData();
+  closeModal('modalEditRoute');
+  state.currentRouteId = null;
+  showScreen('routes');
+  renderRoutes();
+
+  // DB removal
+  try{
+    await sheetsJsonp('deleteRoute', { routeId: route.id });
+    await refreshFromSheets(state.source);
+    renderRoutes();
+    showToast('Trať smazána z databáze');
+  }catch(e){
+    console.warn(e);
+    showToast('Nepodařilo se smazat v DB – zkontroluj připojení');
+  }
+});
+
+
+
+// ---------- Stats helpers (leaderboards for checkpoints / finish) ----------
+function getRidesForRoute(routeId){
+  return data.rides.filter(r=>r.routeId===routeId);
+}
+function getCheckpointLeaderboard(route, cpIndex){
+  const rides = getRidesForRoute(route.id);
+  const out = [];
+  for (const r of rides){
+    if (!Array.isArray(r.marks)) continue;
+    if (r.marks.length > cpIndex){
+      const t = r.marks[cpIndex]?.elapsedMs;
+      if (Number.isFinite(t)) out.push({t, dateIso:r.dateIso, rideId:r.id});
+    }
+  }
+  out.sort((a,b)=>a.t-b.t);
+  return out;
+}
+function getFinishLeaderboard(route){
+  return getRidesForRoute(route.id)
+    .filter(r=>Number.isFinite(r.totalMs))
+    .map(r=>({t:r.totalMs, dateIso:r.dateIso, rideId:r.id}))
+    .sort((a,b)=>a.t-b.t);
+}
+function formatDateShort(iso){
+  try{
+    const d = new Date(iso);
+    return d.toLocaleDateString('cs-CZ', {day:'2-digit', month:'2-digit', year:'numeric'});
+  }catch{ return '—';}
+}
+function computeRank(sortedTimes, elapsed){
+  // sortedTimes: [{t,...}] ascending
+  let pos = 1;
+  for (let i=0;i<sortedTimes.length;i++){
+    if (elapsed <= sortedTimes[i].t) { pos = i+1; return {pos, total: sortedTimes.length+1}; }
+  }
+  return {pos: sortedTimes.length+1, total: sortedTimes.length+1};
+}
+function deltaToBest(sortedTimes, elapsed){
+  if (!sortedTimes.length) return null;
+  return elapsed - sortedTimes[0].t; // positive => behind
+}
+
+function pickTvTarget(sortedTimes, currentElapsed){
+  if (!sortedTimes.length) return null;
+  for (let i=0;i<sortedTimes.length;i++){
+    if (sortedTimes[i].t >= currentElapsed){
+      return {rank: i+1, t: sortedTimes[i].t, dateIso: sortedTimes[i].dateIso};
+    }
+  }
+  const last = sortedTimes[sortedTimes.length-1];
+  return {rank: sortedTimes.length, t: last.t, dateIso: last.dateIso, behindLast:true};
+}
+
+
+$('#btnCancelRide')?.addEventListener('click', ()=>{
+  if (!state.ride) return;
+  const ok = confirm('Zrušit jízdu bez uložení?');
+  if (!ok) return;
+  stopTicker();
+  state.ride = null;
+  showToast('Jízda zrušena.', 1800);
+  showScreen('route');
+});
+
+// ---------- Ride logic ----------
+let raf = null;
+
+function startRide(routeId){
+  // Always start a fresh ride session
+  if (state.rideTimer){ clearInterval(state.rideTimer); state.rideTimer=null; }
+  state.ride = {
+    routeId,
+    startMs: null,
+    running: false,
+    marks: [], // {checkpointId, elapsedMs}
+    stoppedMs: null,
+    lastRankCp: null,
+    visual: { segIdx: 0, segStartMs: 0, offsetPx: 0 }
+  };
+  // Save button is shown via modal after finish; no direct save button here.
+  try{ const r=getCurrentRoute(); if(r) resetDuelForRide(r);}catch(e){}
+  $('#rideNote').value = '';
+  $('#rideRunnerName').value = '';
+
+  tick();
+}
+
+function tick(){
+  if (!state.ride) return;
+  // If user left ride screen, stop the timer to avoid stale updates
+  if (state.screen !== 'ride') return;
+  if (state.ride.running){
+    const elapsed = state.ride.startMs==null ? 0 : (nowMs() - state.ride.startMs);
+    $('#rideTimer').textContent = formatTime(elapsed);
+  } else if (state.ride.stoppedMs != null){
+    $('#rideTimer').textContent = formatTime(state.ride.stoppedMs);
+  }
+  try{
+    if (state.screen==='ride'){
+      const route = getCurrentRoute();
+      if (route) updateDuelPositions(route);
+    }
+  }catch(e){}
+  raf = requestAnimationFrame(tick);
+}
+
+function stopRide(){
+  if (!state.ride) return;
+  if (!state.ride.running) return;
+  state.ride.running = false;
+  state.ride.stoppedMs = nowMs() - state.ride.startMs;
+  // no direct save button on ride screen
+
+  // Finish rank toast (TV)
+  try{
+    const route = getCurrentRoute();
+    if (route){
+      const finLb = getFinishLeaderboard(route);
+      const total = state.ride.stoppedMs;
+      const rankInfo = computeRank(finLb, total);
+      const dBest = deltaToBest(finLb, total);
+      const deltaTxt = (dBest==null) ? '—' : (dBest<=0 ? `-${formatTimeShort(Math.abs(dBest))} před #1` : `+${formatTimeShort(dBest)} za #1`);
+      showToast(`Cíl: <b>${formatTimeShort(total)}</b><small>Umístění v cíli: #${rankInfo.pos}/${rankInfo.total} • ${deltaTxt}</small>`, 3200);
+    }
+  }catch(e){}
+}
+
+function rideNextCheckpoint(){
+  const route = getCurrentRoute();
+  if (!route || !state.ride || !state.ride.running) return;
+  const idx = state.ride.marks.length;
+  // If all checkpoints done, next is Finish
+  if (idx >= route.checkpoints.length){
+    stopRide();
+    // convenience: open save dialog
+    try{ openSaveRide(); }catch(e){}
+    return;
+  }
+  const cp = route.checkpoints[idx];
+  const elapsed = state.ride.startMs==null ? 0 : (nowMs() - state.ride.startMs);
+  state.ride.marks.push({ checkpointId: cp.id, elapsedMs: elapsed });
+
+  // TV update: rank at this checkpoint
+  const lb = getCheckpointLeaderboard(route, idx);
+  const rankInfo = computeRank(lb, elapsed);
+  const dBest = deltaToBest(lb, elapsed);
+  const prevRank = state.ride.lastRankCp;
+  state.ride.lastRankCp = rankInfo.pos;
+
+  const deltaTxt = (dBest==null) ? '—' : (dBest<=0 ? `-${formatTimeShort(Math.abs(dBest))} před #1` : `+${formatTimeShort(dBest)} za #1`);
+  const changeTxt = (prevRank==null) ? '' : (rankInfo.pos>prevRank ? ` • propad na #${rankInfo.pos}` : (rankInfo.pos<prevRank ? ` • posun na #${rankInfo.pos}` : ` • držíš #${rankInfo.pos}`));
+
+  showToast(
+    `${escapeHtml(cp.name)}: <b>${formatTimeShort(elapsed)}</b><small>Umístění na CP: #${rankInfo.pos}/${rankInfo.total}${changeTxt} • ${deltaTxt}</small>`,
+    2600
+  );
+
+  renderRide();
+}
+
+function rideUndo(){
+  if (!state.ride) return;
+  state.ride.marks.pop();
+  renderRide();
+}
+
+function renderRide(){
+  const route = getCurrentRoute();
+  if (!route || !state.ride) return;
+
+  // --- Tile 1: header/meta/progress/profile ---
+  const titleEl = $('#rideRouteTitle');
+  if (titleEl) titleEl.textContent = route.name;
+
+  const sourcePill = $('#rideSourcePill');
+  if (sourcePill) sourcePill.textContent = state.source || route.source || '—';
+
+  const dist = Number.isFinite(route.totalDistanceKm) ? route.totalDistanceKm : null;
+  const asc  = Number.isFinite(route.totalAscentM) ? route.totalAscentM : null;
+  const distEl = $('#rideMetaDistance');
+  const ascEl  = $('#rideMetaAscent');
+  if (distEl) distEl.textContent = dist!=null ? `${String(dist).replace('.',',')} km` : '— km';
+  if (ascEl)  ascEl.textContent  = asc!=null ? `${Math.round(asc)} m` : '— m';
+
+  const diffIcon = $('#rideDiffIcon');
+  if (diffIcon){
+    diffIcon.className = 'diff-icon';
+    diffIcon.classList.add(((route.difficulty||'flat').toLowerCase()) || 'flat');
+  }
+
+  const cps = Array.isArray(route.checkpoints) ? route.checkpoints : [];
+  const doneCount = (state.ride.marks||[]).length;
+
+  const dotsEl = $('#rideProgressDots');
+  if (dotsEl){
+    dotsEl.innerHTML = '';
+    for (let i=0;i<cps.length;i++){
+      const dot = document.createElement('div');
+      dot.className = 'cp-dot2';
+      if (i < doneCount) dot.classList.add('done');
+      if (i === doneCount) dot.classList.add('next');
+      dot.innerHTML = `<span>${i+1}</span>`;
+      dotsEl.appendChild(dot);
+    }
+  }
+  const progText = $('#rideProgressText');
+  if (progText){
+    progText.textContent = `Checkpointy: ${Math.min(doneCount,cps.length)}/${cps.length} • Další: ${cps[doneCount]?.name ?? '—'}`;
+  }
+
+  try{ drawMiniProfile(route); }catch(e){}
+
+  // --- Tile 2: timer + button label ---
+  const btn = $('#btnNextCheckpoint');
+  if (btn){
+    btn.classList.add('primary','big','pulse');
+    const setBtn = (main, sub, mode)=>{
+      if (sub){
+        btn.innerHTML = `<div class="btn-main">${escapeHtml(main)}</div><div class="btn-sub">${escapeHtml(sub)}</div>`;
+      } else {
+        btn.innerHTML = `<div class="btn-main">${escapeHtml(main)}</div>`;
+      }
+      btn.dataset.mode = mode;
+    };
+
+    if (state.ride.startMs==null && !state.ride.running && doneCount===0){
+      setBtn('Start', null, 'start');
+    } else {
+      const cp = cps[doneCount];
+      const kmVal = Number.isFinite(cp?.distanceKm) ? cp.distanceKm : null;
+      const kmTxt = kmVal!=null ? `${String(kmVal).replace('.',',')} km` : null;
+      const isFinish = !cp || (doneCount >= cps.length-1) || ((cp.name||'').toLowerCase().includes('cíl'));
+      if (isFinish){
+        setBtn('CÍL – Ukončit', kmTxt, 'finish');
+      } else {
+        setBtn('Další checkpoint', kmTxt, 'next');
+      }
+    }
+  }
+
+  // --- Tile 3 + 4 ---
+  try{ renderRideTVCompare(route); }catch(e){}
+  try{ renderDuelMarks(route); updateDuelPositions(route); }catch(e){}
+}
+
+function drawMiniProfile(route){
+  const c = $('#rideMiniProfile');
+  if (!c) return;
+  const ctx = c.getContext('2d');
+  const w = c.width, h = c.height;
+  ctx.clearRect(0,0,w,h);
+
+  ctx.fillStyle = 'rgba(0,0,0,0.10)';
+  ctx.fillRect(0,0,w,h);
+
+  const prof = Array.isArray(route.profile) ? route.profile : [];
+  if (prof.length < 2){
+    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(0,h*0.6); ctx.lineTo(w,h*0.6); ctx.stroke();
+    return;
+  }
+
+  const maxD = prof[prof.length-1].d || 1;
+  let minE=Infinity, maxE=-Infinity;
+  prof.forEach(p=>{ minE=Math.min(minE,p.e); maxE=Math.max(maxE,p.e); });
+  const eSpan = Math.max(1,(maxE-minE));
+
+  ctx.beginPath();
+  prof.forEach((p,i)=>{
+    const x = (p.d/maxD)*w;
+    const y = h - ((p.e-minE)/eSpan)*(h*0.78) - h*0.08;
+    if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+  });
+
+  const grad = ctx.createLinearGradient(0,0,w,0);
+  grad.addColorStop(0,'rgba(88,255,136,0.28)');
+  grad.addColorStop(0.5,'rgba(255,212,87,0.22)');
+  grad.addColorStop(1,'rgba(96,166,255,0.24)');
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = grad;
+  ctx.stroke();
+
+  ctx.lineTo(w,h);
+  ctx.lineTo(0,h);
+  ctx.closePath();
+  const fill = ctx.createLinearGradient(0,0,0,h);
+  fill.addColorStop(0,'rgba(88,255,136,0.14)');
+  fill.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle = fill;
+  ctx.fill();
+
+  const cps = route.checkpoints || [];
+  cps.forEach((cp, idx)=>{
+    if (!Number.isFinite(cp.distanceKm) || !Number.isFinite(route.totalDistanceKm) || route.totalDistanceKm<=0) return;
+    const x = (cp.distanceKm/route.totalDistanceKm)*w;
+    ctx.strokeStyle = idx===cps.length-1 ? 'rgba(255,255,255,0.20)' : 'rgba(255,212,87,0.24)';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+  });
+}
+
+function renderRideTVCompare(route){
+  const ride = state.ride;
+  const best = getBestTimes(route.id);
+
+  const elapsed = (ride.startMs==null) ? 0 : (ride.running ? (nowMs()-ride.startMs) : (ride.stoppedMs ?? 0));
+  const lastIdx = Math.max(0, ride.marks.length-1);
+
+  const yourAtLast = (ride.marks[lastIdx]?.elapsedMs ?? 0);
+  const bestAtLast = best?.splits?.[lastIdx] ?? null;
+
+  let lossText = '—';
+  if (bestAtLast!=null && yourAtLast>0){
+    const diff = yourAtLast - bestAtLast;
+    lossText = (diff>=0?'+':'-') + formatTimeShort(Math.abs(diff));
+  } else if (best?.finishMs!=null && elapsed>0){
+    const diff = elapsed - best.finishMs;
+    lossText = (diff>=0?'+':'-') + formatTimeShort(Math.abs(diff));
+  }
+
+  const lossEl = $('#cmpLossBest'); if (lossEl) lossEl.textContent = lossText;
+
+  const nextIdx = ride.marks.length;
+  const nextBest = best?.splits?.[nextIdx] ?? null;
+  const nextName = route.checkpoints?.[nextIdx]?.name ?? '—';
+  const finishBest = best?.finishMs ?? null;
+
+  const subEl = $('#cmpLossSub');
+  if (subEl){
+    const a = (nextBest!=null && elapsed>0) ? `Další CP: ` + ((elapsed-nextBest)>=0?'+':'-') + formatTimeShort(Math.abs(elapsed-nextBest)) : `Další CP: —`;
+    const b = (finishBest!=null && elapsed>0) ? `Cíl: ` + ((elapsed-finishBest)>=0?'+':'-') + formatTimeShort(Math.abs(elapsed-finishBest)) : 'Cíl: —';
+    subEl.textContent = `${a} • ${b}`;
+  }
+
+  const rowsEl = $('#tvRankRows');
+  if (rowsEl){
+    rowsEl.innerHTML = '';
+    const lb = getCheckpointLeaderboard(route.id, lastIdx);
+    const yourTime = (yourAtLast>0) ? yourAtLast : elapsed;
+    const all = lb.slice(0);
+    all.push({label:'Ty', timeMs: yourTime, me:true});
+    all.sort((a,b)=>a.timeMs-b.timeMs);
+
+    const meIndex = all.findIndex(x=>x.me);
+    const pick = [];
+    if (meIndex>0) pick.push(all[meIndex-1]);
+    pick.push(all[meIndex]);
+    if (meIndex<all.length-1) pick.push(all[meIndex+1]);
+
+    pick.forEach((r)=>{
+      const div = document.createElement('div');
+      div.className = 'rank-row' + (r.me ? ' me' : '');
+      const rank = all.indexOf(r) + 1;
+      const who = r.me ? 'Ty' : (r.label || 'Záznam');
+      div.innerHTML = `<div class="who"><span class="rank">#${rank}</span> ${escapeHtml(who)}</div><div class="t">${formatTime(r.timeMs)}</div>`;
+      rowsEl.appendChild(div);
+    });
+  }
+
+  const modeEl = $('#compareMode');
+  if (modeEl) modeEl.textContent = state.source || route.source || '—';
+}
+
+function getBestTimes(routeId){
+  const rides = getRidesForRoute(routeId);
+  if (!rides.length) return null;
+
+  // Normalize (backward compatible)
+  const norm = rides.map(r=>{
+    const finishMs = (r.finishMs!=null) ? r.finishMs : (r.totalMs!=null ? r.totalMs : null);
+    let splits = r.splits;
+    if (!Array.isArray(splits) && Array.isArray(r.marks)){
+      splits = r.marks.map(m=>m.elapsedMs);
+    }
+    return {finishMs, splits: Array.isArray(splits)? splits : [], raw:r};
+  }).filter(x=>x.finishMs!=null);
+
+  if (!norm.length) return null;
+  norm.sort((a,b)=>a.finishMs-b.finishMs);
+  return {finishMs: norm[0].finishMs, splits: norm[0].splits};
+}
+
+function getCheckpointLeaderboard(routeId, cpIdx){
+  const rides = getRidesForRoute(routeId);
+  const rows = [];
+  rides.forEach(r=>{
+    let splits = r.splits;
+    if (!Array.isArray(splits) && Array.isArray(r.marks)){
+      splits = r.marks.map(m=>m.elapsedMs);
+    }
+    const t = (Array.isArray(splits) && splits.length>cpIdx) ? splits[cpIdx] : null;
+    if (t!=null){
+      const label = r.runnerName || r.label || r.dateLabel || (r.dateIso ? new Date(r.dateIso).toLocaleDateString('cs-CZ') : 'Záznam');
+      rows.push({label, timeMs: t});
+    }
+  });
+  rows.sort((a,b)=>a.timeMs-b.timeMs);
+  return rows;
+}
+
+function renderDuelMarks(route){
+  const marksEl = $('#trackMarks');
+  if (!marksEl) return;
+  marksEl.innerHTML = '';
+  const cps = route.checkpoints || [];
+  const total = cps.length;
+  for (let i=0;i<total;i++){
+    const cp = cps[i];
+    const ratio = (Number.isFinite(cp.distanceKm) && Number.isFinite(route.totalDistanceKm) && route.totalDistanceKm>0)
+      ? (cp.distanceKm/route.totalDistanceKm)
+      : (i/(Math.max(1,total-1)));
+
+    const mark = document.createElement('div');
+    mark.className = 'mark';
+    if (i < (state.ride?.marks?.length||0)) mark.classList.add('done');
+    mark.style.left = `${ratio*100}%`;
+    marksEl.appendChild(mark);
+
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.style.left = `${ratio*100}%`;
+    label.textContent = (i===0?'START': (i===total-1?'CÍL': `CP${i+1}`));
+    marksEl.appendChild(label);
+  }
+}
+
+function updateDuelPositions(route){
+  const ride = state.ride;
+  if (!ride) return;
+  const best = getBestTimes(route.id);
+  const elapsed = (ride.startMs==null) ? 0 : (ride.running ? (nowMs()-ride.startMs) : (ride.stoppedMs ?? 0));
+
+  let bestRatio = 0;
+  if (best && Array.isArray(best.splits) && best.splits.length && elapsed>0){
+    const times = best.splits.slice(0, (route.checkpoints||[]).length);
+    let seg=0; while (seg<times.length && times[seg]<elapsed) seg++;
+    if (seg<=0) bestRatio=0;
+    else if (seg>=times.length) bestRatio=1;
+    else {
+      const t0=times[seg-1], t1=times[seg];
+      const r0=ratioForCp(route, seg-1), r1=ratioForCp(route, seg);
+      bestRatio = r0 + (r1-r0)*clamp((elapsed-t0)/Math.max(1,(t1-t0)),0,1);
+    }
+  }
+
+  const cps = route.checkpoints || [];
+  const nextIdx = ride.marks.length;
+  const r0 = ratioForCp(route, Math.max(0,nextIdx-1));
+  const r1 = ratioForCp(route, Math.min(cps.length-1,nextIdx));
+  let yourRatio = r0;
+  if (ride.running && elapsed>0){
+    const t0 = (nextIdx-1>=0) ? (ride.marks[nextIdx-1]?.elapsedMs ?? 0) : 0;
+    let segDur = 8000;
+    if (best && best.splits && best.splits.length>nextIdx){
+      const bt0 = (nextIdx-1>=0) ? best.splits[nextIdx-1] : 0;
+      segDur = Math.max(1500, best.splits[nextIdx]-bt0);
+    }
+    yourRatio = r0 + (r1-r0)*clamp((elapsed-t0)/segDur,0,1);
+  }
+
+  const track = $('#duelTrack');
+  if (!track) return;
+  const pad = 12;
+  const w = track.clientWidth - pad*2;
+  const xBest = pad + w*bestRatio;
+  const xYou  = pad + w*yourRatio;
+
+  const rb=$('#riderBest'); const ry=$('#riderYou');
+  if (rb) rb.style.left = `${xBest}px`;
+  if (ry) ry.style.left = `${xYou}px`;
+
+  const gap=$('#duelGap');
+  if (gap){
+    if (best?.finishMs!=null && elapsed>0){
+      const diff = elapsed - best.finishMs;
+      gap.textContent = (diff>=0?'+':'-') + formatTimeShort(Math.abs(diff));
+    } else gap.textContent='—';
+  }
+}
+
+function ratioForCp(route, idx){
+  const cps = route.checkpoints || [];
+  const total = cps.length;
+  const cp = cps[idx];
+  if (!cp) return (total<=1?0:idx/(total-1));
+  if (Number.isFinite(cp.distanceKm) && Number.isFinite(route.totalDistanceKm) && route.totalDistanceKm>0){
+    return clamp(cp.distanceKm/route.totalDistanceKm,0,1);
+  }
+  return (total<=1?0:idx/(total-1));
+}
+
+function clamp(v,a,b){ return Math.max(a, Math.min(b,v)); }
+function formatTimeShort(ms){
+  const s=Math.round(ms/1000);
+  const m=Math.floor(s/60);
+  const r=s%60;
+  return `${m}:${String(r).padStart(2,'0')}`;
+}
+
+$('#btnNextCheckpoint')?.addEventListener('click', ()=>{
+  const route = getCurrentRoute();
+  if (!route || !state.ride) return;
+
+  // Start (timer starts only after explicit Start)
+  if (state.ride.startMs==null && !state.ride.running && (state.ride.marks||[]).length===0){
+    state.ride.startMs = nowMs();
+    state.ride.running = true;
+    renderRide();
+    return;
+  }
+
+  // Next checkpoint / finish
+  rideNextCheckpoint();
+  renderRide();
+});
+$('#btnUndo')?.addEventListener('click', rideUndo);
+$('#btnStopRide')?.addEventListener('click', ()=>{
+  stopRide();
+  renderRide();
+  openSaveRide();
+});
+$('#btnSaveRide')?.addEventListener('click', openSaveRide);
+
+function openSaveRide(){
+  if (!state.ride) return;
+  if (state.ride.running){
+    // stop first
+    stopRide();
+  }
+  const route = getCurrentRoute(); if (!route) return;
+  const total = state.ride.stoppedMs ?? (nowMs()-state.ride.startMs);
+  const marks = state.ride.marks;
+
+  const lines = [];
+  lines.push(`<b>Trať:</b> ${escapeHtml(route.name)}`);
+  lines.push(`<b>Čas:</b> ${formatTimeShort(total)}`);
+  if (marks.length){
+    const last = marks[marks.length-1].elapsedMs;
+    lines.push(`<b>Checkpointy:</b> ${marks.length}/${route.checkpoints.length} (poslední ${formatTimeShort(last)})`);
+  }
+  $('#saveRideSummary').innerHTML = lines.join('<br/>');
+  if (!$('#rideRunnerName').value){
+    $('#rideRunnerName').value = `Pokus ${new Date().toLocaleDateString('cs-CZ')}`;
+  }
+  openModal('modalSaveRide');
+}
+
+on('#btnSaveRideConfirm', 'click', ()=>{
+  const route = getCurrentRoute(); if (!route || !state.ride) return;
+  const total = state.ride.stoppedMs ?? (nowMs()-state.ride.startMs);
+
+  // Store ride
+  const ride = {
+    id: uid(),
+    routeId: route.id,
+    dateIso: new Date().toISOString(),
+    totalMs: Math.round(total),
+    finishMs: Math.round(total),
+    splits: state.ride.marks.map(m=>Math.round(m.elapsedMs)),
+    marks: state.ride.marks.map(m=>({ checkpointId: m.checkpointId, elapsedMs: Math.round(m.elapsedMs) })),
+    runnerName: ($('#rideRunnerName').value || '').trim() || null,
+    note: $('#rideNote').value.trim() || null,
+  };
+  data.rides.unshift(ride);
+  saveData();
+  // Auto-sync to Google Sheets (queued for offline)
+  queueRideForSync(ride);
+  syncPending().catch(()=>{});
+
+  closeModal('modalSaveRide');
+
+  // cleanup
+  state.ride = null;
+  if (raf) cancelAnimationFrame(raf);
+  raf = null;
+
+  // back to route detail
+  showScreen('route');
+  alert('Uloženo ✅');
+});
+
+// ---------- Leaderboard ----------
+function showSegmentLeaderboard(){
+  const route = getCurrentRoute();
+  if (!route) return;
+  const body = $('#segBody');
+  body.innerHTML = '';
+  $('#segTitle').textContent = `Žebříček checkpointů – ${route.name}`;
+  $('#segHint').textContent = 'Top 5 pro každý checkpoint (a cíl). Každý záznam = „závodník“ (název pokusu nebo datum).';
+
+  // For each checkpoint index
+  route.checkpoints.forEach((cp, idx)=>{
+    const lb = getCheckpointLeaderboard(route, idx);
+    const card = document.createElement('div');
+    card.className = 'seg-card';
+    card.innerHTML = `<div class="h">${escapeHtml(cp.name)} (CP${idx+1})</div>`;
+    if (!lb.length){
+      card.innerHTML += `<div class="hint">Zatím žádné záznamy.</div>`;
+    } else {
+      lb.slice(0,5).forEach((row, i)=>{
+        const ride = data.rides.find(r=>r.id===row.rideId);
+        const who = ride?.runnerName ? escapeHtml(ride.runnerName) : formatDateShort(row.dateIso);
+        const note = ride?.note ? escapeHtml(ride.note) : '—';
+        const div = document.createElement('div');
+        div.className = 'seg-row';
+        div.innerHTML = `<div class="seg-rank">#${i+1}</div><div class="seg-name">${who}<span class="seg-sub">${note}</span></div><div class="seg-time">${formatTimeShort(row.t)}</div>`;
+        card.appendChild(div);
+      });
+    }
+    body.appendChild(card);
+  });
+
+  // Finish
+  const fin = getFinishLeaderboard(route);
+  const card = document.createElement('div');
+  card.className = 'seg-card';
+  card.innerHTML = `<div class="h">Cíl</div>`;
+  if (!fin.length){
+    card.innerHTML += `<div class="hint">Zatím žádné záznamy.</div>`;
+  } else {
+    fin.slice(0,5).forEach((row, i)=>{
+      const ride = data.rides.find(r=>r.id===row.rideId);
+      const who = ride?.runnerName ? escapeHtml(ride.runnerName) : formatDateShort(row.dateIso);
+      const note = ride?.note ? escapeHtml(ride.note) : '—';
+      const div = document.createElement('div');
+      div.className = 'seg-row';
+      div.innerHTML = `<div class="seg-rank">#${i+1}</div><div class="seg-name">${who}<span class="seg-sub">${note}</span></div><div class="seg-time">${formatTimeShort(row.t)}</div>`;
+      card.appendChild(div);
+    });
+  }
+  body.appendChild(card);
+
+  openModal('modalSegmentLeaderboard');
+}
+
+function showLeaderboard(routeIdOrNull){
+  const list = $('#leaderList');
+  list.innerHTML = '';
+
+  let rides = data.rides.slice();
+  // Filter by selected source (Zwift/Kinomap)
+  if (state.source){
+    const routeIds = new Set(data.routes.filter(r=>r.source===state.source).map(r=>r.id));
+    rides = rides.filter(r=>routeIds.has(r.routeId));
+  }
+  let title = 'Historie & Žebříček';
+  let hint = 'Seřazeno podle celkového času (nejrychlejší nahoře).';
+
+  if (routeIdOrNull){
+    const route = data.routes.find(r=>r.id===routeIdOrNull);
+    title = `Žebříček – ${route?.name ?? 'Trať'}`;
+    rides = rides.filter(r=>r.routeId===routeIdOrNull);
+    hint = `Počet jízd: ${rides.length}. ${hint}`;
+  } else {
+    hint = `${state.source ? (state.source + ': ') : ''}Všechny tratě. ${hint}`;
+  }
+
+  rides.sort((a,b)=>a.totalMs - b.totalMs);
+
+  $('#leaderTitle').textContent = title;
+  $('#leaderHint').textContent = hint;
+
+  if (!rides.length){
+    list.innerHTML = `<div class="hint">Zatím žádné uložené jízdy.</div>`;
+    openModal('modalLeaderboard');
+    return;
+  }
+
+  rides.slice(0, 60).forEach((r, i)=>{
+    const route = data.routes.find(x=>x.id===r.routeId);
+    const el = document.createElement('div');
+    el.className = 'leader-item';
+    const date = new Date(r.dateIso);
+    const dateText = date.toLocaleDateString('cs-CZ', {day:'2-digit', month:'2-digit', year:'numeric'});
+    const timeText = formatTimeShort(r.totalMs);
+    const who = r.runnerName ? escapeHtml(r.runnerName) : dateText;
+    el.innerHTML = `
+      <div class="rank">#${i+1}</div>
+      <div class="main">
+        <div class="d">${escapeHtml(route?.name ?? 'Trať')} • ${who}</div>
+        <div class="s">${r.note ? escapeHtml(r.note) : '—'}</div>
+      </div>
+      <div class="time">${timeText}</div>
+    `;
+    list.appendChild(el);
+  });
+
+  openModal('modalLeaderboard');
+}
+
+// ---------- Export / Import / Reset ----------
+on('#btnExport', 'click', ()=>{
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `splittimer-export-${new Date().toISOString().slice(0,10)}.json`;
+  a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href), 1000);
+});
+
+on('#fileImportJson', 'change', async (e)=>{
+  const file = e.target.files?.[0];
+  if (!file) return;
+  try{
+    const obj = JSON.parse(await file.text());
+    if (!obj || !Array.isArray(obj.routes) || !Array.isArray(obj.rides)) throw new Error('bad format');
+    data = obj;
+    saveData();
+    closeModal('modalMenu');
+    showScreen('routes');
+    alert('Import hotový ✅');
+  }catch{
+    alert('Neplatný soubor.');
+  } finally {
+    $('#fileImportJson').value = '';
+  }
+});
+
+on('#btnReset', 'click', ()=>{
+  if (!confirm('Opravdu smazat všechna data?')) return;
+  localStorage.removeItem(STORAGE_KEY);
+  data = loadData();
+  closeModal('modalMenu');
+  showScreen('routes');
+});
+
+
+
+function svgDifficulty(kind){
+  if (kind==='Flat'){
+    return `<svg class="diffsvg" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 12h16" stroke="#33d17a" stroke-width="3.2" stroke-linecap="round" />
+    </svg>`;
+  }
+  if (kind==='Hilly'){
+    return `<svg class="diffsvg" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 14c3-6 6 6 9 0s6 6 9 0" fill="none" stroke="#f6d32d" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+  if (kind==='Mountain'){
+    return `<svg class="diffsvg" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 16l5-8 4 6 3-5 4 7" fill="none" stroke="#ff5c5c" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+  return `<svg class="diffsvg" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M4 12h16" stroke="rgba(255,255,255,.35)" stroke-width="3.2" stroke-linecap="round" />
+  </svg>`;
+}
+
+function svgRibbon(rank){
+  const fill = rank===1 ? "#ffd166" : (rank===2 ? "#cfd8dc" : "#d19a66");
+  const stroke = "rgba(0,0,0,.18)";
+  return `<svg class="ribbon" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M8 3h8l-1 8-3 2-3-2L8 3z" fill="${fill}" stroke="${stroke}" stroke-width="1"/>
+    <path d="M9 13l-2 8 5-3 5 3-2-8" fill="${fill}" opacity=".9" stroke="${stroke}" stroke-width="1"/>
+  </svg>`;
+}
+
+// ---------- Duel track helpers ----------
+function getCheckpointFractions(route){
+  const cps = route.checkpoints || [];
+  // If checkpoints include distanceKm, use it; else equally spaced.
+  const dists = cps.map(c=>Number.isFinite(c.distanceKm)?c.distanceKm:null);
+  const have = dists.some(v=>v!=null);
+  if (have){
+    const max = Math.max(...dists.filter(v=>v!=null));
+    const end = Number.isFinite(route.totalDistanceKm) ? route.totalDistanceKm : max;
+    const denom = (end && end>0) ? end : (max || 1);
+    return cps.map((c,i)=>{
+      const v = Number.isFinite(c.distanceKm) ? c.distanceKm/denom : (i/(Math.max(1,cps.length-1)));
+      return Math.min(1, Math.max(0, v));
+    });
+  }
+  const n = Math.max(1, cps.length-1);
+  return cps.map((_, i)=> i/n);
+}
+
+function renderTrackMarks(route){
+  const marks = $('#trackMarks');
+  if (!marks) return;
+  marks.innerHTML = '';
+  const fr = getCheckpointFractions(route);
+  fr.forEach((f, i)=>{
+    const div = document.createElement('div');
+    div.className = 'duel-mark';
+    div.style.left = `${f*100}%`;
+    const lbl = document.createElement('div');
+    lbl.className = 'lbl';
+    lbl.textContent = (i===0) ? 'START' : (i===fr.length-1 ? 'CÍL' : `CP${i+1}`);
+    div.appendChild(lbl);
+    marks.appendChild(div);
+  });
+}
+
+function getBestRideForRoute(route){
+  const fin = getFinishLeaderboard(route);
+  if (!fin.length) return null;
+  const bestId = fin[0].rideId;
+  return data.rides.find(r=>r.id===bestId) || null;
+}
+
+function getBestCumulativeTimes(route){
+  const bestRide = getBestRideForRoute(route);
+  const cps = route.checkpoints || [];
+  const times = [];
+  for (let i=0;i<cps.length;i++){
+    let t = null;
+    if (bestRide && Array.isArray(bestRide.marks) && bestRide.marks.length>i && Number.isFinite(bestRide.marks[i]?.elapsedMs)){
+      t = bestRide.marks[i].elapsedMs;
+    } else {
+      const lb = getCheckpointLeaderboard(route, i);
+      if (lb.length) t = lb[0].t;
+    }
+    times.push(t);
+  }
+  const fin = getFinishLeaderboard(route);
+  if (times.length && (times[times.length-1]==null) && fin.length) times[times.length-1] = fin[0].t;
+  return times;
+}
+
+function pxWithinTrack(fraction){
+  const track = $('#track');
+  if (!track) return 0;
+  const pad = 14;
+  const w = track.clientWidth - pad*2;
+  return pad + w * Math.min(1, Math.max(0, fraction));
+}
+
+function setRiderLeft(id, px){
+  const el = $('#'+id);
+  const track = $('#track');
+  if (!el || !track || !track.clientWidth) return;
+  const left = (px / track.clientWidth) * 100;
+  el.style.left = `${left}%`;
+}
+
+function resetDuelForRide(route){
+  if (!state.ride) return;
+  state.ride.visual = { segIdx: 0, segStartMs: 0, offsetPx: 0 };
+  renderTrackMarks(route);
+  const p0 = pxWithinTrack(0);
+  setRiderLeft('riderBest', p0);
+  setRiderLeft('riderYou', p0);
+}
+
+function updateOffsetOnCheckpoint(route, checkpointIdx, elapsedAtCp){
+  const bestTimes = getBestCumulativeTimes(route);
+  const bestAt = bestTimes[checkpointIdx] ?? null;
+  if (bestAt == null) return;
+
+  const delta = elapsedAtCp - bestAt; // + behind
+  const steps = Math.floor(Math.abs(delta) / 5000); // 5s steps
+  const dir = delta > 0 ? -1 : +1; // behind -> back
+  const stepPx = 10;
+  state.ride.visual.offsetPx = dir * steps * stepPx;
+
+  state.ride.visual.segIdx = checkpointIdx;
+  state.ride.visual.segStartMs = elapsedAtCp;
+}
+
+function updateDuelPositions(route){
+  const ride = state.ride;
+  if (!route || !ride) return;
+  const fr = getCheckpointFractions(route);
+  if (!fr.length) return;
+
+  const bestTimes = getBestCumulativeTimes(route);
+  const segIdx = Math.min(ride.visual?.segIdx ?? 0, fr.length-1);
+  const segStartF = fr[segIdx] ?? 0;
+  const segEndF = fr[Math.min(segIdx+1, fr.length-1)] ?? 1;
+
+  const tStart = segIdx===0 ? 0 : (bestTimes[segIdx-1] ?? 0);
+  const tEnd = bestTimes[segIdx] ?? (tStart + 60000);
+  const segDur = Math.max(15000, (tEnd - tStart) || 60000);
+
+  const elapsedNow = ride.running ? (nowMs() - ride.startMs) : (ride.stoppedMs ?? 0);
+  const segElapsed = Math.max(0, elapsedNow - (ride.visual?.segStartMs ?? 0));
+  const p = Math.min(1, segElapsed / segDur);
+
+  const baseF = segStartF + (segEndF - segStartF) * p;
+  const basePx = pxWithinTrack(baseF);
+
+  setRiderLeft('riderBest', basePx);
+  setRiderLeft('riderYou', basePx + (ride.visual?.offsetPx ?? 0));
+}
+
+
+// ---------- Profile drawing ----------
+function drawProfile(route){
+  const canvas = $('#profileCanvas');
+  const ctx = canvas.getContext('2d');
+
+  // HiDPI
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  canvas.width = Math.floor(rect.width * dpr);
+  canvas.height = Math.floor((rect.width*0.35) * dpr); // aspect similar to mock
+  ctx.scale(dpr, dpr);
+
+  const w = rect.width;
+  const h = rect.width*0.35;
+
+  // background
+  ctx.clearRect(0,0,w,h);
+  roundRect(ctx, 0, 0, w, h, 12, '#f7f9fc');
+  ctx.save();
+  ctx.beginPath();
+  clipRoundRect(ctx, 0, 0, w, h, 12);
+  ctx.clip();
+
+  if (!route.profile || route.profile.length < 2){
+    // empty
+    ctx.fillStyle = '#667085';
+    ctx.font = '600 13px -apple-system, system-ui, Segoe UI, Roboto';
+    ctx.fillText('Profil zatím není (importuj GPX)', 14, 22);
+    ctx.restore();
+    return;
+  }
+
+  const pts = route.profile;
+  const maxD = pts[pts.length-1].distanceKm;
+  let minE = Infinity, maxE = -Infinity;
+  for (const p of pts){ minE = Math.min(minE, p.elevationM); maxE = Math.max(maxE, p.elevationM); }
+  if (minE === maxE){ maxE += 1; }
+
+  const pad = {l:40, r:12, t:10, b:26};
+  const innerW = w - pad.l - pad.r;
+  const innerH = h - pad.t - pad.b;
+
+  // grid
+  ctx.strokeStyle = 'rgba(102,112,133,.28)';
+  ctx.lineWidth = 1;
+  for (let i=0;i<=4;i++){
+    const y = pad.t + innerH*(i/4);
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w-pad.r, y); ctx.stroke();
+  }
+
+  // area path
+  const x = (km)=> pad.l + (km/maxD)*innerW;
+  const y = (m)=> pad.t + (1 - (m-minE)/(maxE-minE))*innerH;
+
+  ctx.beginPath();
+  ctx.moveTo(x(pts[0].distanceKm), y(pts[0].elevationM));
+  for (const p of pts){
+    ctx.lineTo(x(p.distanceKm), y(p.elevationM));
+  }
+  // close to bottom
+  ctx.lineTo(x(pts[pts.length-1].distanceKm), pad.t+innerH);
+  ctx.lineTo(x(pts[0].distanceKm), pad.t+innerH);
+  ctx.closePath();
+
+  // fill
+  const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t+innerH);
+  grad.addColorStop(0, '#2f7d3f');
+  grad.addColorStop(1, '#6dbf72');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // ridge line
+  ctx.beginPath();
+  ctx.moveTo(x(pts[0].distanceKm), y(pts[0].elevationM));
+  for (const p of pts){ ctx.lineTo(x(p.distanceKm), y(p.elevationM)); }
+  ctx.strokeStyle = 'rgba(14,54,24,.55)';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // axes labels (simple)
+  ctx.fillStyle = '#223';
+  ctx.font = '700 12px -apple-system, system-ui, Segoe UI, Roboto';
+  ctx.fillText(`${Math.round(maxE)} m`, 8, pad.t+12);
+  ctx.fillText(`${Math.round(minE)} m`, 8, pad.t+innerH);
+
+  // x ticks at 0, 1/3, 2/3, end
+  const ticks = [0, maxD/3, (2*maxD)/3, maxD];
+  ctx.fillStyle = '#223';
+  ticks.forEach((t, i)=>{
+    const tx = x(t);
+    ctx.strokeStyle = 'rgba(102,112,133,.35)';
+    ctx.beginPath(); ctx.moveTo(tx, pad.t); ctx.lineTo(tx, pad.t+innerH); ctx.stroke();
+    const label = `${Math.round(t)} km`;
+    const lw = ctx.measureText(label).width;
+    ctx.fillText(label, tx - lw/2, h-8);
+  });
+
+  // checkpoint markers if have distance
+  const cps = route.checkpoints.filter(c=>Number.isFinite(c.distanceKm));
+  cps.forEach((cp, idx)=>{
+    const cx = x(cp.distanceKm);
+    // find nearest profile elevation
+    const elev = nearestElevation(cp.distanceKm, pts);
+    const cy = y(elev);
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI*2);
+    ctx.fillStyle = (idx===0?'#2aa36c':(idx===route.checkpoints.length-1?'#d64545':'#2a6fb8'));
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.9)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  });
+
+  ctx.restore();
+}
+
+function nearestElevation(km, pts){
+  let best = pts[0].elevationM, bestD = Infinity;
+  for (const p of pts){
+    const d = Math.abs(p.distanceKm - km);
+    if (d < bestD){ bestD = d; best = p.elevationM; }
+  }
+  return best;
+}
+
+function roundRect(ctx, x,y,w,h,r, fill){
+  ctx.beginPath();
+  clipRoundRect(ctx,x,y,w,h,r);
+  ctx.closePath();
+  ctx.fillStyle = fill;
+  ctx.fill();
+}
+function clipRoundRect(ctx, x,y,w,h,r){
+  const rr = Math.min(r, w/2, h/2);
+  ctx.moveTo(x+rr, y);
+  ctx.arcTo(x+w, y, x+w, y+h, rr);
+  ctx.arcTo(x+w, y+h, x, y+h, rr);
+  ctx.arcTo(x, y+h, x, y, rr);
+  ctx.arcTo(x, y, x+w, y, rr);
+}
+
+window.addEventListener('resize', ()=>{
+  if (state.screen==='route'){
+    const route = getCurrentRoute();
+    if (route) drawProfile(route);
+  }
+});
+
+// ---------- GPX parsing (basic) ----------
+function parseGpx(xmlText){
+  const doc = new DOMParser().parseFromString(xmlText, 'application/xml');
+  const trkpts = Array.from(doc.getElementsByTagName('trkpt'));
+  if (!trkpts.length) throw new Error('no trkpt');
+
+  const pts = [];
+  for (const p of trkpts){
+    const lat = parseFloat(p.getAttribute('lat'));
+    const lon = parseFloat(p.getAttribute('lon'));
+    const eleNode = p.getElementsByTagName('ele')[0];
+    const ele = eleNode ? parseFloat(eleNode.textContent) : 0;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    pts.push({lat, lon, ele: Number.isFinite(ele) ? ele : 0});
+  }
+  if (pts.length < 2) throw new Error('too few points');
+
+  // distance + ascent
+  let distKm = 0;
+  let ascent = 0;
+  const profile = [{distanceKm:0, elevationM: pts[0].ele}];
+
+  for (let i=1;i<pts.length;i++){
+    const a = pts[i-1], b = pts[i];
+    const d = haversineKm(a.lat, a.lon, b.lat, b.lon);
+    distKm += d;
+    const de = b.ele - a.ele;
+    if (de > 0) ascent += de;
+    profile.push({distanceKm: distKm, elevationM: b.ele});
+  }
+  return { totalDistanceKm: distKm, totalAscentM: ascent, profile };
+}
+
+function downsampleProfile(profile, maxPoints){
+  if (profile.length <= maxPoints) return profile;
+  // uniform sampling
+  const step = (profile.length-1) / (maxPoints-1);
+  const out = [];
+  for (let i=0;i<maxPoints;i++){
+    const idx = Math.round(i*step);
+    out.push(profile[idx]);
+  }
+  // ensure last point exactly last
+  out[out.length-1] = profile[profile.length-1];
+  return out;
+}
+
+function haversineKm(lat1, lon1, lat2, lon2){
+  const R = 6371;
+  const toRad = (x)=>x*Math.PI/180;
+  const dLat = toRad(lat2-lat1);
+  const dLon = toRad(lon2-lon1);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLon/2)**2;
+  const c = 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R*c;
+}
+function round2(x){ return Math.round(x*100)/100; }
+
+function showToast(html, ms=2200){
+  const t = $('#toast');
+  if (!t) return;
+  t.innerHTML = html;
+  t.hidden = false;
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(()=>{ t.hidden = true; }, ms);
+}
+
+// ---------- Safety: escape HTML ----------
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, (c)=>({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
+// Initial render
+state.source = loadSource();
+updateSourceUi();
+showScreen('source');
