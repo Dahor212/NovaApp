@@ -645,7 +645,7 @@ function renderRouteDetail(){
   } else {
     top5.forEach((row, i)=>{
       const ride = data.rides.find(r=>r.id===row.rideId);
-      const who = ride?.runnerName || formatDateShort(row(row.dateIso);
+      const who = ride?.runnerName || formatDateShort(row.dateIso);
       const note = ride?.note ? ride.note : '—';
       const el = document.createElement('div');
       el.className = 'rowitem';
