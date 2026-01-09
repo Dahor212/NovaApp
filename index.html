@@ -41,14 +41,14 @@
           </div>
         </section>
         <section class="pad source-cards">
-  <button class="source-card zwift" type="button" id="btnPickZwift" aria-label="Vybrat Zwift">
-    <span class="source-card__label">Zwift</span>
-  </button>
+          <button class="source-card zwift" type="button" id="btnPickZwift" aria-label="Vybrat Zwift">
+            <span class="source-card__label">Zwift</span>
+          </button>
 
-  <button class="source-card kinomap" type="button" id="btnPickKinomap" aria-label="Vybrat Kinomap">
-    <span class="source-card__label">Kinomap</span>
-  </button>
-</section>
+          <button class="source-card kinomap" type="button" id="btnPickKinomap" aria-label="Vybrat Kinomap">
+            <span class="source-card__label">Kinomap</span>
+          </button>
+        </section>
 
         <section class="pad">
           <div class="hint">Výběr lze kdykoliv změnit v Menu.</div>
@@ -114,9 +114,6 @@
           <div class="hint subtle">Za jízdy mačkej „Další checkpoint“ — bere checkpointy v pořadí.</div>
         </section>
 
-        </section>
-
-        
         <section class="pad">
           <div class="row gap">
             <button class="ghost wide" id="btnEditRoute" type="button">Upravit trať</button>
@@ -138,7 +135,7 @@
       </main>
 
 
-  <!-- RIDE -->
+      <!-- RIDE -->
       <main class="screen" id="screenRide" data-screen="ride" hidden>
 
         <!-- 1) Route summary + progress + mini profile -->
@@ -236,7 +233,7 @@
       </main>
 
 
-  <!-- BOTTOM SHEETS / MODALS -->
+      <!-- BOTTOM SHEETS / MODALS -->
 
       <div class="modal" id="modalSegmentLeaderboard" hidden>
         <div class="sheet large">
@@ -271,19 +268,10 @@
       <div class="modal" id="modalCreateRoute" hidden>
         <div class="sheet">
           <div class="sheet-title">Nová trať</div>
-          
+
           <label class="field">
             Zdroj
             <select id="newRouteSource">
-              <option value="Zwift">Zwift</option>
-              <option value="Kinomap">Kinomap</option>
-            </select>
-          </label>
-
-          
-          <label class="field">
-            Zdroj
-            <select id="editRouteSource">
               <option value="Zwift">Zwift</option>
               <option value="Kinomap">Kinomap</option>
             </select>
@@ -293,10 +281,34 @@
             Název tratě
             <input type="text" id="newRouteName" placeholder="Např. Alpská Výzva" />
           </label>
+
           <label class="field">
+            GPX soubor (z /Gpx/)
+            <select id="newRouteGpx">
+              <option value="">Načítám seznam…</option>
+            </select>
+          </label>
+
+          <div class="hint subtle" style="margin-top:-6px">
+            Vybereš GPX a aplikace dopočítá délku, převýšení a profil. Název si zadáš sám.
+          </div>
+
+          <label class="field">
+            Délka (km) — automaticky z GPX
+            <input type="text" id="newRouteDistanceAuto" placeholder="—" disabled />
+          </label>
+
+          <label class="field">
+            Převýšení (m) — automaticky z GPX
+            <input type="text" id="newRouteAscentAuto" placeholder="—" disabled />
+          </label>
+
+          <!-- Původní pole nechávám (disabled) kvůli kompatibilitě s app.js, pokud na něj někde saháš -->
+          <label class="field" style="display:none">
             Délka (km) — volitelné
             <input type="number" inputmode="decimal" id="newRouteDistance" placeholder="25.6" />
           </label>
+
           <div class="row gap">
             <button class="primary" id="btnCreateRouteConfirm">Vytvořit</button>
             <button class="ghost" data-close="modalCreateRoute">Zrušit</button>
@@ -400,21 +412,21 @@
 
   <script src="app.js"></script>
   <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
-      }
-    </script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+    }
+  </script>
   <div id="errbox" hidden style="position:fixed;left:10px;right:10px;bottom:10px;z-index:99999;background:rgba(255,60,60,.18);border:1px solid rgba(255,60,60,.35);color:#fff;padding:10px 12px;border-radius:14px;font:12px/1.35 -apple-system,system-ui;white-space:pre-wrap"></div>
 
-    <script>
-      // Debug: show JS errors on iPhone quickly
-      window.addEventListener('error', (e)=>{
-        try{
-          const box = document.getElementById('errbox');
-          if(box){ box.hidden=false; box.textContent = 'JS error: ' + (e.message||e.error||'') }
-        }catch{}
-      });
-    </script>
+  <script>
+    // Debug: show JS errors on iPhone quickly
+    window.addEventListener('error', (e)=>{
+      try{
+        const box = document.getElementById('errbox');
+        if(box){ box.hidden=false; box.textContent = 'JS error: ' + (e.message||e.error||'') }
+      }catch{}
+    });
+  </script>
 
 </body>
 </html>
