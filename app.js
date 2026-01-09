@@ -983,6 +983,21 @@ if (rs) rs.innerHTML = '';
   const fin = getFinishLeaderboard(route);
   const bestMs = fin.length ? fin[0].t : null;
   $('#routeBest').textContent = `Nejlepší čas: ${bestMs!=null ? formatTimeShort(bestMs) : '—'}`;
+function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+function colorForGrade(gradePct){
+  // gradePct: např. +8 znamená 8% stoupání, -6 znamená 6% klesání
+  const g = Math.max(-18, Math.min(18, gradePct));
+  if (g >= 0){
+    // green (uphill) – intenzita dle sklonu
+    const t = clamp01(g / 12);
+    return `rgba(${Math.round(40 + 20*t)}, ${Math.round(210 - 35*t)}, ${Math.round(110 - 30*t)}, 0.95)`;
+  } else {
+    // blue (downhill)
+    const t = clamp01((-g) / 12);
+    return `rgba(${Math.round(80 - 10*t)}, ${Math.round(160 - 20*t)}, ${Math.round(255 - 10*t)}, 0.95)`;
+  }
+}
 
   // Profile
   drawProfile(route);
