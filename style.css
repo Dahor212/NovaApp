@@ -1349,4 +1349,55 @@ html, body{
 .app-container{
   background: transparent !important;
 }
+/* ================================
+   ROUTES screen – remove extra layer
+   ================================ */
+
+/* A) Vypnout jakýkoliv background/border/shadow na kontejnerech okolo seznamu */
+#screenRoutes,
+#screenRoutes .pad,
+#screenRoutes .list,
+#routesList{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* B) Pokud se ti pod tím stále rýsuje "karta", bývá to často obecná .card – tak ji na routes obrazovce vypneme */
+#screenRoutes .card{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* C) iOS Safari občas renderuje "ostrý" roh kvůli overflow na parentu – sjednotíme */
+#screenRoutes{
+  border-radius: 0 !important;
+  overflow: visible !important;
+}
+/* ================================
+   ROUTE TILE – force same size for all bands
+   ================================ */
+
+.route-item.route-tile{
+  min-height: 150px !important;   /* velikost jako "mountain" */
+}
+
+/* Kdyby staré band třídy měnily výšku/padding, přepíšeme je natvrdo */
+.route-item.route-tile.bg-flat,
+.route-item.route-tile.bg-hilly,
+.route-item.route-tile.bg-mountain{
+  min-height: 150px !important;
+}
+
+/* Stejný vnitřní layout u všech */
+.route-item.route-tile .route-tile__inner{
+  min-height: 150px !important;
+  padding: 16px 16px !important;
+}
+/* jistota: nic uvnitř nemůže vyčuhovat mimo radius */
+.route-item.route-tile,
+.route-item.route-tile *{
+  -webkit-mask-image: -webkit-radial-gradient(white, black);
+}
 
