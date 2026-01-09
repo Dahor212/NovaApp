@@ -923,6 +923,14 @@ function renderRouteDetail(){
 
   const distKm = Number.isFinite(route.totalDistanceKm) ? route.totalDistanceKm : null;
   const ascM = Number.isFinite(route.totalAscentM) ? Math.round(route.totalAscentM) : null;
+// --- HERO background (flat/hilly/mountain) ---
+const hero = $('#routeHero');
+if (hero){
+  hero.classList.remove('hero-flat','hero-hilly','hero-mountain');
+
+  const band = ascentBand(route.totalAscentM); // používáš už pro dlaždice v přehledu
+  hero.classList.add(`hero-${band}`);
+}
 
   const distTxt = distKm!=null ? `${String(distKm).replace('.',',')} km` : '— km';
   const ascTxt = ascM!=null ? `${ascM} m` : '— m';
@@ -937,7 +945,39 @@ function renderRouteDetail(){
     diff = '—';
   }
 
-  $('#routeStats').innerHTML = `${distTxt}  •  <span class="difficon">${svgDifficulty(diff)}<span>${diff}</span></span>  •  ${ascTxt}`;
+  // --- HERO pills (no dots, aligned) ---
+const pills = $('#routeHeroPills');
+if (pills){
+  const best = getFinishLeaderboard(route);
+  const bestMs = best.length ? best[0].t : null;
+
+  pills.innerHTML = `
+    <span class="route-pill">
+      ${svgIcon('distance')}
+      ${distTxt}
+    </span>
+
+    <span class="route-pill">
+      ${svgIcon('ascent')}
+      ${ascTxt}
+    </span>
+
+    <span class="route-pill">
+      ${svgIcon('diff')}
+      ${diff}
+    </span>
+
+    <span class="route-pill">
+      ${svgIcon('trophy')}
+      ${bestMs!=null ? formatTimeShort(bestMs) : '—'}
+    </span>
+  `;
+}
+
+// starý řádek s tečkama už nechceme:
+const rs = $('#routeStats');
+if (rs) rs.innerHTML = '';
+
 
   // Best time
   const fin = getFinishLeaderboard(route);
