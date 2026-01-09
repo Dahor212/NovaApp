@@ -171,27 +171,19 @@
           </div>
         </section>
 
-        
-        
         <!-- 2) Timer + controls -->
-        <section class="card pad ride-tile ride-timer-tile">
-          <div class="row between ride-timer-head">
-            <div class="card-title">Čas</div>
-            <div class="pill" id="rideBestPill">Best: —</div>
-          </div>
-
+        <section class="card pad ride-tile">
           <div class="ride-timer" id="rideTimer">00:00:00</div>
 
-          <div class="row gap ride-actions">
-            <button class="btn cancel" id="btnCancelRide">Zrušit jízdu</button>
-            <button class="btn primary" id="btnNextCheckpoint">Start</button>
+          <div class="ride-controls">
+            <button class="btn-secondary wide" id="btnCancelRide" type="button">Zrušit jízdu</button>
+            <button class="btn-primary wide" id="btnNextCheckpoint" type="button">Start</button>
           </div>
 
-          <div class="hint ride-timer-hint" id="rideTimerHint">
-            Start spustí měření. Další checkpoint ukládá mezičas. Cíl ukončí jízdu.
-          </div>
+          <div class="hint subtle" id="rideHint">Otevři jízdu, stiskni Start a pak mačkej „Další checkpoint“ při průjezdu bodem. Na konci se změní na „CÍL – Ukončit“.</div>
         </section>
-<!-- 3) TV compare -->
+
+        <!-- 3) TV compare -->
         <section class="card pad ride-tile">
           <div class="row between">
             <div class="card-title">TV režim</div>
@@ -209,17 +201,44 @@
             <div class="tv-rank-rows" id="tvRankRows"></div>
           </div>
         </section>
-        <section class="card pad ride-tile" id="tileNextCpRank">
+
+        <!-- 4) Duel -->
+        <section class="card pad ride-tile">
           <div class="row between">
-            <div class="card-title">Pořadí na příštím checkpointu</div>
-            <div class="pill" id="nextCpPill">CP —</div>
+            <div class="card-title">Duel</div>
+            <div class="pill" id="duelMode">Best vs Ty</div>
           </div>
-          <div class="tv-rank-rows" id="nextCpRankRows"></div>
-          <div class="hint" id="nextCpHint">Po startu uvidíš, jak si průběžně vedeš vůči uloženým časům.</div>
+
+          <div class="duel-track" id="duelTrack">
+            <div class="duel-marks" id="trackMarks"></div>
+
+            <div class="rider best" id="riderBest" aria-label="Best">
+              <div class="rider-badge">BEST</div>
+              <svg class="bike-svg" viewBox="0 0 64 64" aria-hidden="true">
+                <circle cx="18" cy="46" r="10" fill="none" stroke="currentColor" stroke-width="4"/>
+                <circle cx="46" cy="46" r="10" fill="none" stroke="currentColor" stroke-width="4"/>
+                <path d="M18 46l12-24h10l10 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M30 22l-8 16h16" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+
+            <div class="rider you" id="riderYou" aria-label="Ty">
+              <div class="rider-badge">TY</div>
+              <svg class="bike-svg" viewBox="0 0 64 64" aria-hidden="true">
+                <circle cx="18" cy="46" r="10" fill="none" stroke="currentColor" stroke-width="4"/>
+                <circle cx="46" cy="46" r="10" fill="none" stroke="currentColor" stroke-width="4"/>
+                <path d="M18 46l12-24h10l10 24" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M30 22l-8 16h16" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+
+            <div class="duel-gap" id="duelGap">—</div>
+          </div>
+
+          <div class="hint subtle">Riders se posouvají skokově po checkpointu (mezi checkpointy drží pozici). Mezera roste po 5 s rozdílu.</div>
         </section>
 
-
-        </main>
+      </main>
 
 
       <!-- BOTTOM SHEETS / MODALS -->
@@ -366,13 +385,22 @@
         <div class="sheet">
           <div class="sheet-title">Uložit výsledek</div>
           <div class="mini" id="saveRideSummary"></div>
-          <div class="saveboard">
-            <div class="row between">
-              <div class="card-title">Žebříček (cíl)</div>
-              <button class="ghost tiny" id="btnOpenFullLeaderboard">Celý žebříček</button>
-            </div>
-            <div id="saveRideLeaderboard" class="leader-list compact"></div>
-          </div>
+          <!-- NOVĚ: přehledný žebříček pro tuto trať (posuvný) -->
+<div class="save-lb">
+  <div class="row between save-lb-head">
+    <div class="save-lb-title">Žebříček (cíl)</div>
+    <div class="pill subtle" id="saveLbCount">0</div>
+  </div>
+
+  <div class="save-lb-scroll" id="saveLbBody">
+    <!-- sem se doplní řádky z JS -->
+  </div>
+
+  <div class="save-lb-hint">
+    Tip: „Ty (aktuální)“ je vložené jen pro náhled – uloží se až po kliknutí na <b>Uložit</b>.
+  </div>
+</div>
+
           <label class="field">
             Závodník / název pokusu (volitelné)
             <input type="text" id="rideRunnerName" placeholder="Např. Pokus #3 / FTP / Race" />
