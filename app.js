@@ -1550,24 +1550,33 @@ $('#btnCancelRide')?.addEventListener('click', ()=>{
 let raf = null;
 
 function startRide(routeId){
+  // ✅ tvrdý reset render smyčky a UI timeru (fix "58s a přitom Start")
+  try { if (raf) cancelAnimationFrame(raf); } catch(e){}
+  raf = null;
+
+  const t = $('#rideTimer');
+  if (t) t.textContent = '00:00:00';
+
   // Always start a fresh ride session
   if (state.rideTimer){ clearInterval(state.rideTimer); state.rideTimer=null; }
   state.ride = {
     routeId,
     startMs: null,
     running: false,
-    marks: [], // {checkpointId, elapsedMs}
+    marks: [],
     stoppedMs: null,
     lastRankCp: null,
     visual: { segIdx: 0, segStartMs: 0, offsetPx: 0 }
   };
-  // Save button is shown via modal after finish; no direct save button here.
+
+  // ... zbytek nech jak máš
   try{ const r=getCurrentRoute(); if(r) resetDuelForRide(r);}catch(e){}
   $('#rideNote').value = '';
   $('#rideRunnerName').value = '';
 
   tick();
 }
+
 
 function tick(){
   if (!state.ride) return;
