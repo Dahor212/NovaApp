@@ -1623,4 +1623,62 @@ main.app, .app, .screen, .screenRoot, .screen-root, .screenWrap, .screen-wrap {
   display: block;
   border-radius: 14px;
 }
+/* ===== Section headers alignment ===== */
+#screenRouteDetail h2,
+#screenRouteDetail h3,
+#screenRouteDetail .section-title {
+  padding-left: 12px;
+  padding-right: 12px;
+  margin-bottom: 8px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+}
+#screenRouteDetail .section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  margin-bottom: 8px;
+}
+/* ===== Universal tiles look ===== */
+#screenRouteDetail .tile,
+#screenRouteDetail .section,
+#screenRouteDetail .card,
+#screenRouteDetail .list-card {
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 18px;
+  box-shadow: 0 10px 26px rgba(0,0,0,0.22);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  padding: 14px;
+}
+#screenRouteDetail .section + .section,
+#screenRouteDetail .card + .card {
+  margin-top: 16px;
+}
+/* ===== List rows ===== */
+#screenRouteDetail .rowitem,
+#screenRouteDetail .list-row {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+
+#screenRouteDetail .rowitem + .rowitem {
+  margin-top: 10px;
+}
+/* ===== Checkpoints ===== */
+#screenRouteDetail .checkpoint-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+#screenRouteDetail .checkpoint-actions button {
+  min-width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
 
