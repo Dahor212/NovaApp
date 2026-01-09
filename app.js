@@ -1819,8 +1819,13 @@ function renderRide(){
   }
 
   // --- Tile 3 + 4 ---
-  try{ renderRideTVCompare(route); }catch(e){}
-  try{ renderDuelMarks(route); updateDuelPositions(route); }catch(e){}
+    try{ renderRideTVCompare(route); }catch(e){}
+
+  // ✅ Duel pryč (nevolat)
+  const duelEl =
+    $('#tileDuel') || $('#duelTile') || $('#duelSection') || $('#duelCard') || $('#duel');
+  if (duelEl) duelEl.hidden = true;
+
 }
 
 function drawMiniProfile(route, ghostKm){
