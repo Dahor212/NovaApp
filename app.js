@@ -1667,12 +1667,20 @@ function tick(){
   } else if (state.ride.stoppedMs != null){
     $('#rideTimer').textContent = formatTime(state.ride.stoppedMs);
   }
-  try{
+    try{
     if (state.screen==='ride'){
       const route = getCurrentRoute();
-      if (route) updateDuelPositions(route);
+      if (route){
+        const elapsed = (state.ride.startMs==null) ? 0 :
+          (state.ride.running ? (nowMs()-state.ride.startMs) : (state.ride.stoppedMs ?? 0));
+
+        const ghostKm = getBestGhostKmAtElapsed(route, elapsed);
+        drawMiniProfile(route, ghostKm);
+        renderUpcomingCpRank(route, elapsed); // ✅ TV pořadí na NADCHÁZEJÍCÍ CP
+      }
     }
   }catch(e){}
+
   raf = requestAnimationFrame(tick);
 }
 
