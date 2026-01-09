@@ -82,6 +82,72 @@ function computeAscentDescent(profilePts){
   }
   return { up: Math.round(up), down: Math.round(down) };
 }
+function lerp(a,b,t){ return a + (b-a)*t; }
+
+function resampleProfileByPixels(pts, xFn, pixelStep=2){
+  // pts: [{distanceKm,elevationM}...] sorted by distanceKm
+  const out = [];
+  const w = xFn(pts[pts.length-1].distanceKm) - xFn(pts[0].distanceKm);
+  const steps = Math.max(30, Math.floor(w / pixelStep));
+
+  const totalKm = pts[pts.length-1].distanceKm;
+  let j = 0;
+
+  for(let i=0;i<=steps;i++){
+    const km = (i/steps) * totalKm;
+
+    while(j < pts.length-2 && pts[j+1].distanceKm < km) j++;
+
+    const a = pts[j], b = pts[j+1];
+    const span = (b.distanceKm - a.distanceKm) || 1e-9;
+    const t = (km - a.distanceKm) / span;
+
+    out.push({
+      distanceKm: km,
+      elevationM: lerp(a.elevationM, b.elevationM, t)
+    });
+  }
+  return out;
+}
+
+function smoothElevations(pts, window=5){
+  // moving average on elevation
+  const half = Math.floor(window/2);
+  const out = pts.map(p=>({...p}));
+  for(let i=0;i<pts.length;i++){
+    let s=0, c=0;
+    for(let k=-half;k<=half;k++){
+      const idx = i+k;
+      if(idx>=0 && idx<pts.length){
+        s += pts[idx].elevationM;
+        c++;
+      }
+    }
+    out[i].elevationM = s / (c||1);
+  }
+  return out;
+}
+
+// Catmull-Rom -> Bezier smooth path
+function buildSmoothPath(ctx, points, tension=0.6){
+  if(points.length < 2) return;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+
+  for(let i=0;i<points.length-1;i++){
+    const p0 = points[i-1] || points[i];
+    const p1 = points[i];
+    const p2 = points[i+1];
+    const p3 = points[i+2] || p2;
+
+    const cp1x = p1.x + (p2.x - p0.x) * (tension/6);
+    const cp1y = p1.y + (p2.y - p0.y) * (tension/6);
+    const cp2x = p2.x - (p3.x - p1.x) * (tension/6);
+    const cp2y = p2.y - (p3.y - p1.y) * (tension/6);
+
+    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, p2.x, p2.y);
+  }
+}
 
 
 // ✅ NOVÉ: krok profilu (v metrech) – ukládá se do DB
