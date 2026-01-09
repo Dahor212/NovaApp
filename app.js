@@ -195,6 +195,85 @@ function ghostKmAtElapsed(route, bestPack, elapsedMs){
 
   return finishKm;
 }
+// ✅ Best ghost position (smooth) – based on BEST overall time, interpolated between checkpoints
+function getBestGhostKmAtElapsed(route, elapsedMs){
+  if (!route) return null;
+  const totalKm = Number.isFinite(route.totalDistanceKm) ? route.totalDistanceKm : null;
+  if (!totalKm || totalKm <= 0) return null;
+
+  const best = getBestTimes(route.id); // {finishMs, splits}
+  if (!best || !Number.isFinite(best.finishMs) || best.finishMs <= 0) return null;
+
+  // checkpoint distances -> fractions -> kms
+  const cps = Array.isArray(route.checkpoints) ? route.checkpoints : [];
+  const fractions = [];
+  for (let i=0;i<cps.length;i++){
+    fractions.push(ratioForCp(route, i)); // already clamps 0..1
+  }
+
+  // times: cumulative at each cp, plus finish
+  const times = [];
+  for (let i=0;i<cps.length;i++){
+    const t = (Array.isArray(best.splits) && Number.isFinite(best.splits[i])) ? best.splits[i] : null;
+    times.push(t);
+  }
+  // finish as last "node"
+  fractions.push(1);
+  times.push(best.finishMs);
+
+  // if we have no checkpoint times at all, just linear 0..finish
+  const hasAny = times.some(x=>Number.isFinite(x) && x>0);
+  if (!hasAny){
+    const f = clamp(elapsedMs / best.finishMs, 0, 1);
+    return totalKm * f;
+  }
+
+  // build nodes (0 at start)
+  const nodeF = [0];
+  const nodeT = [0];
+
+  for (let i=0;i<times.length;i++){
+    if (!Number.isFinite(times[i])) continue;
+    nodeF.push(fractions[i]);
+    nodeT.push(times[i]);
+  }
+
+  // ensure last node is finish
+  if (nodeF[nodeF.length-1] !== 1){
+    nodeF.push(1);
+    nodeT.push(best.finishMs);
+  }
+
+  // clamp elapsed
+  const tNow = clamp(elapsedMs, 0, best.finishMs);
+
+  // find segment
+  let seg = 1;
+  while (seg < nodeT.length && nodeT[seg] < tNow) seg++;
+
+  if (seg <= 0) return 0;
+  if (seg >= nodeT.length) return totalKm;
+
+  const t0 = nodeT[seg-1], t1 = nodeT[seg];
+  const f0 = nodeF[seg-1], f1 = nodeF[seg];
+  const span = Math.max(1, (t1 - t0));
+  const p = clamp((tNow - t0) / span, 0, 1);
+  const f = f0 + (f1 - f0) * p;
+  return totalKm * clamp(f, 0, 1);
+}
+
+function interpEleAtKmFromProfile(profilePts, km){
+  if (!Array.isArray(profilePts) || profilePts.length < 2) return null;
+  if (km <= profilePts[0].distanceKm) return profilePts[0].elevationM;
+  if (km >= profilePts[profilePts.length-1].distanceKm) return profilePts[profilePts.length-1].elevationM;
+
+  let j = 0;
+  while (j < profilePts.length-2 && profilePts[j+1].distanceKm < km) j++;
+  const a = profilePts[j], b = profilePts[j+1];
+  const span = (b.distanceKm - a.distanceKm) || 1e-9;
+  const t = (km - a.distanceKm) / span;
+  return a.elevationM + (b.elevationM - a.elevationM) * t;
+}
 
 function resampleProfileByPixels(pts, xFn, pixelStep=2){
   // pts: [{distanceKm,elevationM}...] sorted by distanceKm
