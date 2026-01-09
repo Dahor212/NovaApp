@@ -1546,4 +1546,10 @@ main.app, .app, .screen, .screenRoot, .screen-root, .screenWrap, .screen-wrap {
   background: transparent !important;
   border-radius: 14px;
 }
+/* Emergency: allow clicks even if some overlay is on top */
+.bg, .background, .overlay, .veil, .scrim, .glassOverlay,
+.app::before, .screen::before, .page::before,
+.app::after,  .screen::after,  .page::after {
+  pointer-events: none !important;
+}
 
