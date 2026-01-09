@@ -1988,6 +1988,61 @@ function renderRideTVCompare(route){
   const modeEl = $('#compareMode');
   if (modeEl) modeEl.textContent = state.source || route.source || '—';
 }
+// ✅ LIVE rank for upcoming checkpoint (TV timing style)
+function renderUpcomingCpRank(route, elapsedMs){
+  // očekáváme existenci #tvRankRows (už ho používáš)
+  const rowsEl = $('#tvRankRows');
+  if (!rowsEl || !state.ride || !route) return;
+
+  const ride = state.ride;
+  const nextIdx = ride.marks.length; // nadcházející CP index (0..)
+  const cps = route.checkpoints || [];
+
+  // pokud už jsme za posledním CP (tj. cíl), tak nic
+  if (nextIdx >= cps.length) return;
+
+  // leaderboard časů pro nadcházející CP
+  const lb = getCheckpointLeaderboard(route.id, nextIdx); // [{label,timeMs}] sorted
+  const all = lb.slice(0);
+
+  // vlož "Ty" s aktuálním elapsed
+  const yourTime = Math.max(0, Math.round(elapsedMs || 0));
+  all.push({ label: 'Ty', timeMs: yourTime, me: true });
+  all.sort((a,b)=>a.timeMs - b.timeMs);
+
+  const meIndex = all.findIndex(x=>x.me);
+  if (meIndex < 0) return;
+
+  // vyber předchozí, ty, následující
+  const pick = [];
+  if (meIndex > 0) pick.push(all[meIndex-1]);
+  pick.push(all[meIndex]);
+  if (meIndex < all.length-1) pick.push(all[meIndex+1]);
+
+  // přepiš nadpis pokud existuje
+  const titleEl = $('#tvRankTitle');
+  if (titleEl){
+    titleEl.textContent = `Pořadí na dalším checkpointu: ${cps[nextIdx]?.name ?? `CP${nextIdx+1}`}`;
+  }
+
+  rowsEl.innerHTML = '';
+  pick.forEach((r)=>{
+    const div = document.createElement('div');
+    div.className = 'rank-row' + (r.me ? ' me' : '');
+    const rank = all.indexOf(r) + 1;
+    const who = r.me ? 'Ty' : (r.label || 'Záznam');
+    div.innerHTML =
+      `<div class="who"><span class="rank">#${rank}</span> ${escapeHtml(who)}</div>` +
+      `<div class="t">${formatTime(r.timeMs)}</div>`;
+    rowsEl.appendChild(div);
+  });
+
+  // volitelně: drobný hint “#pos/total”
+  const hintEl = $('#tvRankHint');
+  if (hintEl){
+    hintEl.textContent = `Průběžně: #${meIndex+1}/${all.length}`;
+  }
+}
 
 function getBestTimes(routeId){
   const rides = getRidesForRoute(routeId);
