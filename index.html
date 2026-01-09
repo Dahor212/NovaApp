@@ -73,12 +73,20 @@
       <!-- ROUTE DETAIL -->
       <main class="screen" id="screenRouteDetail" data-screen="route" hidden>
         <section class="pad">
-          <div class="route-header">
-            <div class="route-title" id="routeName">—</div>
-            <div class="route-sub" id="routeStats">—</div>
-            <div class="route-best" id="routeBest">Nejlepší čas: —</div>
-          </div>
-        </section>
+  <div class="route-hero hero-flat" id="routeHero">
+    <div class="route-hero__overlay"></div>
+
+    <div class="route-hero__content">
+      <div class="route-title" id="routeName">—</div>
+
+      <!-- sem budeme rendrovat pěkné bubliny -->
+      <div class="route-hero__pills" id="routeHeroPills"></div>
+
+      <div class="route-best" id="routeBest">Nejlepší čas: —</div>
+    </div>
+  </div>
+</section>
+
 
         <section class="card pad">
           <div class="row between">
