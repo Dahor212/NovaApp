@@ -385,6 +385,22 @@
         <div class="sheet">
           <div class="sheet-title">Uložit výsledek</div>
           <div class="mini" id="saveRideSummary"></div>
+          <!-- NOVĚ: přehledný žebříček pro tuto trať (posuvný) -->
+<div class="save-lb">
+  <div class="row between save-lb-head">
+    <div class="save-lb-title">Žebříček (cíl)</div>
+    <div class="pill subtle" id="saveLbCount">0</div>
+  </div>
+
+  <div class="save-lb-scroll" id="saveLbBody">
+    <!-- sem se doplní řádky z JS -->
+  </div>
+
+  <div class="save-lb-hint">
+    Tip: „Ty (aktuální)“ je vložené jen pro náhled – uloží se až po kliknutí na <b>Uložit</b>.
+  </div>
+</div>
+
           <label class="field">
             Závodník / název pokusu (volitelné)
             <input type="text" id="rideRunnerName" placeholder="Např. Pokus #3 / FTP / Race" />
