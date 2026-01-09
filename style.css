@@ -610,9 +610,9 @@ button:disabled{opacity:.5}
   gap:12px;
   padding: 14px 14px;
   border-radius: 18px;
-  background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.06));
-  border: 1px solid rgba(255,255,255,.12);
-  box-shadow: 0 16px 46px rgba(0,0,0,.45);
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,.10);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
   margin-top:12px;
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
@@ -625,18 +625,18 @@ button:disabled{opacity:.5}
 .cp-actions{display:flex; gap:8px}
 .cp-mini{
   height:34px;
-  padding:0 10px;
-  border-radius:12px;
-  border:1px solid rgba(255,255,255,.10);
-  background: rgba(255,255,255,.10);
+  padding:10px 14px;
+  border-radius:14px;
+  border:1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.06);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.10), 0 10px 30px rgba(0,0,0,.35);
   color: rgba(255,255,255,.92);
   font-weight:1000;
 }
 .cp-mini:disabled{opacity:.35}
 .cp-mini.danger{
-  background: rgba(255,72,72,.18);
-  border-color: rgba(255,72,72,.22);
+  background: rgba(255,90,90,0.18);
+  border-color: rgba(255,90,90,0.28);
 }
 
 /* --- Icons --- */
