@@ -1703,4 +1703,76 @@ main.app, .app, .screen, .screenRoot, .screen-root, .screenWrap, .screen-wrap {
 #screenRouteDetail {
   padding-bottom: 24px;
 }
+/* ===== Save modal leaderboard ===== */
+.save-lb{
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+
+.save-lb-head{ margin-bottom: 8px; }
+.save-lb-title{ font-weight: 1000; letter-spacing: .2px; }
+.save-lb-scroll{
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 6px;
+}
+
+.save-lb-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 14px;
+  background: rgba(0,0,0,0.16);
+  border: 1px solid rgba(255,255,255,0.08);
+  margin-bottom: 8px;
+}
+
+.save-lb-row.me{
+  background: rgba(96,166,255,0.16);
+  border-color: rgba(96,166,255,0.22);
+}
+
+.save-lb-left{
+  min-width: 0;
+}
+.save-lb-who{
+  font-weight: 900;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.save-lb-sub{
+  font-size: 12px;
+  opacity: .75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.save-lb-rank{
+  font-size: 12px;
+  font-weight: 1000;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.10);
+  margin-right: 8px;
+}
+
+.save-lb-time{
+  font-variant-numeric: tabular-nums;
+  font-weight: 1000;
+}
+
+.save-lb-hint{
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: .75;
+}
 
