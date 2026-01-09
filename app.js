@@ -1738,7 +1738,6 @@ function stopRide(){
       const dBest = deltaToBest(finLb, total);
       const deltaTxt = (dBest==null) ? '—' : (dBest<=0 ? `-${formatTimeShort(Math.abs(dBest))} před #1` : `+${formatTimeShort(dBest)} za #1`);
       showToast(`Cíl: <b>${formatTimeShort(total)}</b><small>Umístění v cíli: #${rankInfo.pos}/${rankInfo.total} • ${deltaTxt}</small>`, 3200);
-  sayBonus('finish', { deltaMs: dBest });
     }
   }catch(e){}
 }
@@ -1772,7 +1771,6 @@ function rideNextCheckpoint(){
     `${escapeHtml(cp.name)}: <b>${formatTimeShort(elapsed)}</b><small>Umístění na CP: #${rankInfo.pos}/${rankInfo.total}${changeTxt} • ${deltaTxt}</small>`,
     2600
   );
-    sayBonus('cp', { deltaMs: dBest });
 
   renderRide();
 }
@@ -2265,7 +2263,6 @@ $('#btnNextCheckpoint')?.addEventListener('click', ()=>{
   if (state.ride.startMs==null && !state.ride.running && (state.ride.marks||[]).length===0){
     state.ride.startMs = nowMs();
     state.ride.running = true;
-  sayBonus('start');
     renderRide();
     return;
   }
@@ -2973,108 +2970,6 @@ function showToast(html, ms=2200){
   clearTimeout(showToast._timer);
   showToast._timer = setTimeout(()=>{ t.hidden = true; }, ms);
 }
-
-// ===== Bonus hlášky (soutěžní "komentář") =====
-const BONUS_ENABLED_KEY = 'splittimer:bonus:v1';
-const bonusState = {
-  enabled: JSON.parse(localStorage.getItem(BONUS_ENABLED_KEY) || 'true'),
-  lastAt: 0,
-  lastMsg: '',
-};
-
-function setBonusEnabled(v){
-  bonusState.enabled = !!v;
-  localStorage.setItem(BONUS_ENABLED_KEY, JSON.stringify(bonusState.enabled));
-}
-
-function pick(arr){
-  return arr[Math.floor(Math.random()*arr.length)];
-}
-
-function sayBonus(kind, ctx={}){
-  if (!bonusState.enabled) return;
-  const now = Date.now();
-  // ochrana proti spamování
-  if (now - bonusState.lastAt < 2500) return;
-
-  const base = {
-    start: [
-      "🎬 Jdeme na to! Rozjeď to.",
-      "🚀 Start! Drž tempo.",
-      "⚡️ Teď je čas zrychlit.",
-      "🔥 Připrav se na nejlepší výkon."
-    ],
-    cp_good: [
-      "✅ Skvělý mezičas! Jedeš parádně.",
-      "💪 Dobrá práce – drž rytmus!",
-      "🚴‍♂️ Tohle vypadá na osobák!",
-      "✨ Čistý split. Jen tak dál."
-    ],
-    cp_bad: [
-      "⏱️ Nevadí – zrychli v dalším úseku!",
-      "🎯 Ztráta je malá, dá se to stáhnout.",
-      "🧠 Zkus srovnat tempo a hned to půjde.",
-      "💥 Teď zabrat a je to zpátky."
-    ],
-    finish_good: [
-      "🏁 Hotovo! To byl výborný čas!",
-      "🥇 Paráda – tohle je hodně silný výkon.",
-      "🔥 Cíl! Dneska to sedlo.",
-      "🚀 Do cíle jako raketa!"
-    ],
-    finish_bad: [
-      "🏁 Cíl! Zapiš si to a příště to zlomíš.",
-      "👏 Dokončeno – příště to půjde ještě líp.",
-      "💡 Teď už víš, kde přidat. Zkus repete!",
-      "✅ Dojeto. Zkus ještě jeden pokus?"
-    ],
-    ahead: [
-      "🟢 Jedeš před nejlepším časem!",
-      "⚡️ Jsi v náskoku!",
-      "🔥 Tohle je rychlejší než best!",
-    ],
-    behind: [
-      "🔴 Jsi lehce za bestem – pořád to můžeš otočit.",
-      "⏱️ Malá ztráta. Zkus to zlomit teď!",
-      "💪 Ještě to není ztracené."
-    ],
-  };
-
-  let msg = null;
-
-  if (kind === 'cp'){
-    const d = Number(ctx.deltaMs);
-    if (Number.isFinite(d)){
-      msg = d <= 0 ? pick(base.cp_good) : pick(base.cp_bad);
-    } else {
-      msg = pick(base.cp_good);
-    }
-  } else if (kind === 'finish'){
-    const d = Number(ctx.deltaMs);
-    if (Number.isFinite(d)){
-      msg = d <= 0 ? pick(base.finish_good) : pick(base.finish_bad);
-    } else {
-      msg = pick(base.finish_good);
-    }
-  } else if (kind === 'gap'){
-    const d = Number(ctx.deltaMs);
-    if (Number.isFinite(d)){
-      msg = d <= 0 ? pick(base.ahead) : pick(base.behind);
-    }
-  } else {
-    msg = pick(base[kind] || base.start);
-  }
-
-  if (!msg) return;
-  // neopakovat stejnou hlášku
-  if (msg === bonusState.lastMsg && (now - bonusState.lastAt) < 8000) return;
-
-  bonusState.lastAt = now;
-  bonusState.lastMsg = msg;
-  showToast(msg, 2200);
-}
-
-
 
 // ---------- Safety: escape HTML ----------
 function escapeHtml(s){
