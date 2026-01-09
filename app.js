@@ -44,24 +44,43 @@ const GPX_BASE_PATH = './Gpx/';
 // ===== Profile helpers (MUST be defined before drawProfile) =====
 function clamp01(x){ return Math.max(0, Math.min(1, x)); }
 
+// ===== TV-style profile helpers =====
+function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+function rgba(hex, a){
+  // hex: "#rrggbb"
+  const h = String(hex).replace('#','').trim();
+  const r = parseInt(h.slice(0,2),16)||0;
+  const g = parseInt(h.slice(2,4),16)||0;
+  const b = parseInt(h.slice(4,6),16)||0;
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+// grade in % (e.g. 7.5 means +7.5%)
 function colorForGrade(gradePct){
-  // gradePct: +8 = 8% uphill, -6 = 6% downhill
-  const g = Math.max(-18, Math.min(18, Number(gradePct) || 0));
-  if (g >= 0){
-    // green (uphill) – stronger for steeper
-    const t = clamp01(g / 12);
-    const r = Math.round(40 + 20*t);
-    const gch = Math.round(210 - 35*t);
-    const b = Math.round(110 - 30*t);
-    return `rgba(${r},${gch},${b},0.95)`;
-  } else {
-    // blue (downhill) – stronger for steeper
-    const t = clamp01((-g) / 12);
-    const r = Math.round(80 - 10*t);
-    const gch = Math.round(160 - 20*t);
-    const b = Math.round(255 - 10*t);
-    return `rgba(${r},${gch},${b},0.95)`;
+  const g = Number(gradePct);
+  if (!Number.isFinite(g)) return '#5bd48a';
+
+  // descending
+  if (g <= -6) return '#2aa7ff';
+  if (g <= -2) return '#46c7ff';
+
+  // flat-ish
+  if (g < 2) return '#4fe38b';
+
+  // climbing
+  if (g < 5) return '#d8e24a';
+  if (g < 8) return '#ffb547';
+  return '#ff5b5b';
+}
+
+function computeAscentDescent(profilePts){
+  let up = 0, down = 0;
+  for (let i=1;i<profilePts.length;i++){
+    const de = (profilePts[i].elevationM - profilePts[i-1].elevationM);
+    if (de>0) up += de; else down += (-de);
   }
+  return { up: Math.round(up), down: Math.round(down) };
 }
 
 
