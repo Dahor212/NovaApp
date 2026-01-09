@@ -804,51 +804,98 @@ on('#btnCreateRouteConfirm', 'click', async ()=>{
 function renderRoutes(){
   const list = $('#routesList');
   list.innerHTML = '';
-  if (!data.routes.length){
+
+  const routesAll = Array.isArray(data.routes) ? data.routes.slice() : [];
+
+  // 1) filtr zdroje
+  const routesFiltered = routesAll.filter(r => !state.source || r.source === state.source);
+
+  // 2) seřazení podle poslední jízdy (nejnovější nahoře)
+  routesFiltered.sort((a,b)=>{
+    const ta = getLastRideTs(a.id);
+    const tb = getLastRideTs(b.id);
+    // nejdřív ty co mají jízdy, pak bez jízd
+    if (tb !== ta) return tb - ta;
+    // fallback: podle názvu
+    return String(a.name||'').localeCompare(String(b.name||''), 'cs');
+  });
+
+  if (!routesFiltered.length){
     list.innerHTML = `<div class="pad"><div class="hint">Zatím nemáš žádné tratě. Vytvoř si první.</div></div>`;
     return;
   }
 
-  data.routes
-    .filter(r=>!state.source || r.source===state.source)
-    .forEach(route=>{
-      const count = data.rides.filter(r=>r.routeId===route.id).length;
+  routesFiltered.forEach(route=>{
+    const ridesForRoute = data.rides.filter(r=>r.routeId===route.id);
+    const count = ridesForRoute.length;
 
-      const distText = route.totalDistanceKm
-        ? `Délka: ${String(route.totalDistanceKm).replace('.',',')} km`
-        : `Délka: —`;
+    // distance/ascent
+    const distKm = Number.isFinite(route.totalDistanceKm) ? route.totalDistanceKm : null;
+    const ascM = Number.isFinite(route.totalAscentM) ? Math.round(route.totalAscentM) : null;
 
-      const ascM = Number.isFinite(route.totalAscentM) ? Math.round(route.totalAscentM) : null;
-      const ascText = ascM!=null ? `${ascM} m` : `— m`;
+    const distText = distKm!=null ? `${String(distKm).replace('.',',')} km` : '— km';
+    const ascText  = ascM!=null ? `${ascM} m` : '— m';
 
-      // ✅ NOVÉ: třída pro pozadí podle totalAscentM (flat/hilly/mountain)
-      const band = ascentBand(route.totalAscentM);
+    // difficulty badge from ascentBand
+    const band = ascentBand(route.totalAscentM); // flat/hilly/mountain
+    const diffLabel = (band==='flat') ? 'Flat' : (band==='hilly' ? 'Hilly' : 'Mountain');
+    const diffIcon = (band==='flat') ? '⎯' : (band==='hilly' ? '≈' : '⛰');
 
-      const el = document.createElement('div');
-      el.className = `route-item route-tile bg-${band}`;
+    // best time
+    const fin = getFinishLeaderboard(route); // používáš už v detailu
+    const bestMs = fin.length ? fin[0].t : null;
+    const bestText = bestMs!=null ? formatTimeShort(bestMs) : '—';
 
-      // (volitelně) data atribut – kdyby sis to chtěl stylovat i přes [data-band="..."]
-      el.dataset.band = band;
+    const el = document.createElement('div');
+    el.className = `route-item route-tile bg-${band}`;
+    el.dataset.band = band;
 
-      el.innerHTML = `
-        <div class="route-tile__inner">
-          <div>
-            <div class="name">${escapeHtml(route.name)}</div>
-            <div class="sub">${distText} &nbsp;•&nbsp; ${ascText} &nbsp;|&nbsp; ${count} záznamů</div>
+    // ikony (inline svg) – bez externích souborů
+    const svgUp = `<svg class="rt-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l6 7h-4v9H10v-9H6l6-7z" fill="currentColor"/></svg>`;
+    const svgClock = `<svg class="rt-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20zm1-10.4V6h-2v6.2l5 3 .9-1.5-3.9-2.3z" fill="currentColor"/></svg>`;
+    const svgTrophy = `<svg class="rt-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-3V2H8v2H5v4a5 5 0 0 0 5 5h.1A6 6 0 0 0 11 16v2H8v2h8v-2h-3v-2a6 6 0 0 0 .9-3H14a5 5 0 0 0 5-5V4zm-2 4a3 3 0 0 1-3 3V6h3v2zM7 8V6h3v5a3 3 0 0 1-3-3z" fill="currentColor"/></svg>`;
+
+    el.innerHTML = `
+      <div class="route-tile__inner">
+        <div class="route-tile__panel">
+          <div class="route-tile__title">${escapeHtml(route.name || 'Trať')}</div>
+
+          <div class="route-tile__meta">
+            <span class="rt-badge">${svgClock}<span>${distText}</span></span>
+            <span class="rt-badge">${svgUp}<span>${ascText}</span></span>
+            <span class="rt-badge"><span style="font-weight:800">${diffIcon}</span><span>${diffLabel}</span></span>
+            <span class="rt-badge">${svgTrophy}<span>${bestText}</span></span>
+            <span class="rt-badge"><span style="opacity:.95">📌</span><span>${count} záznamů</span></span>
           </div>
-          <svg class="chev" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-          </svg>
         </div>
-      `;
 
-      el.addEventListener('click', ()=>{
-        state.currentRouteId = route.id;
-        showScreen('route');
-      });
-      list.appendChild(el);
+        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+    `;
+
+    el.addEventListener('click', ()=>{
+      state.currentRouteId = route.id;
+      showScreen('route');
     });
+
+    list.appendChild(el);
+  });
 }
+
+/* pomocná funkce – poslední jízda pro route */
+function getLastRideTs(routeId){
+  const rides = data.rides.filter(r=>r.routeId===routeId);
+  if (!rides.length) return 0;
+  let max = 0;
+  for (const r of rides){
+    const t = Date.parse(r.dateIso || r.dateISO || '');
+    if (Number.isFinite(t) && t > max) max = t;
+  }
+  return max;
+}
+
 
 on('#btnHistoryAll', 'click', ()=>{
   showLeaderboard(null);
