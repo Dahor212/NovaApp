@@ -83,6 +83,118 @@ function computeAscentDescent(profilePts){
   return { up: Math.round(up), down: Math.round(down) };
 }
 function lerp(a,b,t){ return a + (b-a)*t; }
+function getBestRideForRouteId(routeId){
+  const rides = getRidesForRoute(routeId).slice();
+  // jen dokončené
+  const done = rides.filter(r => Number.isFinite(r.finishMs ?? r.totalMs));
+  if (!done.length) return null;
+
+  done.sort((a,b)=> (a.finishMs ?? a.totalMs) - (b.finishMs ?? b.totalMs));
+  return done[0];
+}
+
+function getBestPackForRoute(route){
+  const bestRide = getBestRideForRouteId(route.id);
+  if (!bestRide) return null;
+
+  const finishMs = bestRide.finishMs ?? bestRide.totalMs;
+  if (!Number.isFinite(finishMs) || finishMs <= 0) return null;
+
+  // splity = kumulativní časy na CP
+  let splits = Array.isArray(bestRide.splits) ? bestRide.splits.slice() : [];
+  if (!splits.length && Array.isArray(bestRide.marks)) {
+    splits = bestRide.marks.map(m => m.elapsedMs).filter(Number.isFinite);
+  }
+
+  // omez délku na počet CP
+  const cpCount = (route.checkpoints || []).length;
+  if (cpCount && splits.length > cpCount) splits = splits.slice(0, cpCount);
+
+  return { finishMs, splits };
+}
+
+function clamp(v,a,b){ return Math.max(a, Math.min(b,v)); }
+
+// lineární interpolace elevace z route.profile (distanceKm/elevationM)
+function elevationAtKm(profilePts, km){
+  if (!Array.isArray(profilePts) || profilePts.length < 2) return 0;
+
+  // profil musí být setříděný
+  const pts = profilePts;
+  if (km <= pts[0].distanceKm) return pts[0].elevationM;
+  if (km >= pts[pts.length-1].distanceKm) return pts[pts.length-1].elevationM;
+
+  // binární hledání
+  let lo = 0, hi = pts.length - 1;
+  while (hi - lo > 1){
+    const mid = (lo + hi) >> 1;
+    if (pts[mid].distanceKm <= km) lo = mid; else hi = mid;
+  }
+
+  const a = pts[lo], b = pts[hi];
+  const span = (b.distanceKm - a.distanceKm) || 1e-9;
+  const t = (km - a.distanceKm) / span;
+  return a.elevationM + (b.elevationM - a.elevationM) * t;
+}
+
+// fallback vzdálenosti checkpointů, když nejsou distanceKm
+function checkpointKmArray(route){
+  const cps = Array.isArray(route.checkpoints) ? route.checkpoints : [];
+  const totalKm = Number.isFinite(route.totalDistanceKm) ? route.totalDistanceKm : (cps.length ? (cps[cps.length-1].distanceKm || 0) : 0);
+  if (!cps.length) return [];
+
+  const have = cps.every(c => Number.isFinite(c.distanceKm));
+  if (have) return cps.map(c => c.distanceKm);
+
+  // fallback rovnoměrně
+  const n = cps.length + 1; // + finish
+  return cps.map((_, i) => (totalKm > 0 ? ((i+1)/n) * totalKm : (i+1)));
+}
+
+// vypočte ghost km podle elapsed a nejlepší jízdy
+function ghostKmAtElapsed(route, bestPack, elapsedMs){
+  const totalKm = Number.isFinite(route.totalDistanceKm) ? route.totalDistanceKm : null;
+  const cpsKm = checkpointKmArray(route);
+  const finishKm = totalKm != null ? totalKm : (cpsKm.length ? cpsKm[cpsKm.length-1] : 0);
+
+  const finishMs = bestPack.finishMs;
+  const splits = Array.isArray(bestPack.splits) ? bestPack.splits : [];
+
+  const t = clamp(elapsedMs, 0, finishMs);
+
+  // když nemáme split data, jedeme lineárně 0 -> finish
+  if (!splits.length || !cpsKm.length){
+    const p = finishMs > 0 ? (t / finishMs) : 0;
+    return p * finishKm;
+  }
+
+  // sestavíme segmenty: start -> CP1 -> ... -> CPn -> finish
+  const times = splits.slice(0, cpsKm.length).filter(Number.isFinite);
+  const kms   = cpsKm.slice(0, times.length);
+
+  // přidej finish segment
+  times.push(finishMs);
+  kms.push(finishKm);
+
+  let prevT = 0;
+  let prevKm = 0;
+
+  for (let i=0;i<times.length;i++){
+    const nextT = times[i];
+    const nextKm = kms[i];
+
+    if (t <= nextT){
+      const span = Math.max(1, nextT - prevT);
+      const p = (t - prevT) / span;
+      return prevKm + p * (nextKm - prevKm);
+    }
+
+    prevT = nextT;
+    prevKm = nextKm;
+  }
+
+  return finishKm;
+}
 
 function resampleProfileByPixels(pts, xFn, pixelStep=2){
   // pts: [{distanceKm,elevationM}...] sorted by distanceKm
