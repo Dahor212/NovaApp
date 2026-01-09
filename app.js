@@ -73,6 +73,41 @@ function colorForGrade(gradePct){
   if (g < 8) return '#ffb547';
   return '#ff5b5b';
 }
+function buildSaveLeaderboardHtml(route, currentTotalMs){
+  // všechny uložené jízdy pro trať (cíl)
+  const rides = (data.rides || []).filter(r => r.routeId === route.id && Number.isFinite(r.totalMs));
+
+  const rows = rides.map(r => ({
+    who: r.runnerName || formatDateShort(r.dateIso),
+    sub: r.note || '—',
+    t: r.totalMs,
+    me: false
+  }));
+
+  // vložíme "Ty (aktuální)" jen jako náhled
+  if (Number.isFinite(currentTotalMs)) {
+    rows.push({
+      who: 'Ty (aktuální)',
+      sub: 'neuloženo',
+      t: Math.round(currentTotalMs),
+      me: true
+    });
+  }
+
+  rows.sort((a,b)=>a.t - b.t);
+
+  const html = rows.map((r, i) => `
+    <div class="save-lb-row ${r.me ? 'me' : ''}">
+      <div class="save-lb-left">
+        <div class="save-lb-who"><span class="save-lb-rank">#${i+1}</span>${escapeHtml(r.who)}</div>
+        <div class="save-lb-sub">${escapeHtml(r.sub)}</div>
+      </div>
+      <div class="save-lb-time">${formatTimeShort(r.t)}</div>
+    </div>
+  `).join('');
+
+  return { html, count: rows.length };
+}
 
 function computeAscentDescent(profilePts){
   let up = 0, down = 0;
