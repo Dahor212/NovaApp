@@ -260,7 +260,10 @@ async function syncRideToSheets(rideId){
     // ✅ NOVÉ
     gpxUrl: route.gpxUrl ?? '',
     profileStepM: route.profileStepM ?? '',
-    profileEleM: (Array.isArray(route.profileEleM) && route.profileEleM.length) ? JSON.stringify(route.profileEleM) : ''
+    profileEleM: (Array.isArray(route.profile) && route.profile.length)
+  ? JSON.stringify(route.profile.map(p => Math.round(p.elevationM || 0)))
+  : ''
+
   });
 
   // Replace checkpoints
