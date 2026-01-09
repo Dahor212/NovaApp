@@ -39,8 +39,9 @@ const APP_VERSION = 'pwa-v26-sheets-db';
 const PENDING_KEY = 'splittimer:pendingSync:v1';
 
 // ✅ NOVÉ: kde leží GPX v repu
-const GPX_INDEX_URL = '/Gpx/index.json';
-const GPX_BASE_PATH = '/Gpx/';
+const GPX_INDEX_URL = './Gpx/index.json';
+const GPX_BASE_PATH = './Gpx/';
+
 
 // ✅ NOVÉ: krok profilu (v metrech) – ukládá se do DB
 const DEFAULT_PROFILE_STEP_M = 20;
