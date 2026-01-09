@@ -1730,59 +1730,178 @@ function renderRide(){
 function drawMiniProfile(route){
   const c = $('#rideMiniProfile');
   if (!c) return;
+
   const ctx = c.getContext('2d');
-  const w = c.width, h = c.height;
+
+  // DPI scaling podle reálné velikosti v layoutu
+  const rect = c.getBoundingClientRect();
+  const dpr = Math.max(1, window.devicePixelRatio || 1);
+  c.width = Math.floor(rect.width * dpr);
+  c.height = Math.floor(rect.height * dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  const w = rect.width;
+  const h = rect.height;
+
   ctx.clearRect(0,0,w,h);
 
-  ctx.fillStyle = 'rgba(0,0,0,0.10)';
-  ctx.fillRect(0,0,w,h);
+  // glass podklad
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,.16)';
+  ctx.strokeStyle = 'rgba(255,255,255,.10)';
+  ctx.lineWidth = 1;
+  // rounded rect
+  const r = 14;
+  ctx.beginPath();
+  ctx.moveTo(r,0);
+  ctx.arcTo(w,0,w,h,r);
+  ctx.arcTo(w,h,0,h,r);
+  ctx.arcTo(0,h,0,0,r);
+  ctx.arcTo(0,0,w,0,r);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
 
-  const prof = Array.isArray(route.profile) ? route.profile : [];
-  if (prof.length < 2){
-    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+  const prof0 = Array.isArray(route.profile) ? route.profile : [];
+  if (prof0.length < 2){
+    // placeholder linka
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
     ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.moveTo(0,h*0.6); ctx.lineTo(w,h*0.6); ctx.stroke();
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(14, h*0.62);
+    ctx.lineTo(w-14, h*0.62);
+    ctx.stroke();
+    ctx.restore();
     return;
   }
 
-  const maxD = prof[prof.length-1].d || 1;
-  let minE=Infinity, maxE=-Infinity;
-  prof.forEach(p=>{ minE=Math.min(minE,p.e); maxE=Math.max(maxE,p.e); });
-  const eSpan = Math.max(1,(maxE-minE));
+  // normalizace profilu
+  const prof = prof0
+    .map(p => ({ distanceKm: Number(p.distanceKm), elevationM: Number(p.elevationM) }))
+    .filter(p => Number.isFinite(p.distanceKm) && Number.isFinite(p.elevationM))
+    .sort((a,b)=>a.distanceKm-b.distanceKm);
 
+  if (prof.length < 2) return;
+
+  const maxD = prof[prof.length-1].distanceKm || 1;
+
+  let minE = Infinity, maxE = -Infinity;
+  for (const p of prof){ minE = Math.min(minE,p.elevationM); maxE = Math.max(maxE,p.elevationM); }
+  if (minE === maxE) maxE = minE + 1;
+
+  const pad = { l: 12, r: 12, t: 10, b: 10 };
+  const iw = w - pad.l - pad.r;
+  const ih = h - pad.t - pad.b;
+
+  const x = (km)=> pad.l + (km/maxD)*iw;
+  const y = (m)=>  pad.t + (1 - (m-minE)/(maxE-minE))*ih;
+
+  // jemná mřížka
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,.08)';
+  ctx.lineWidth = 1;
+  for (let i=1;i<=2;i++){
+    const yy = pad.t + ih*(i/3);
+    ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w-pad.r, yy); ctx.stroke();
+  }
+  ctx.restore();
+
+  // smooth body: resample + smooth (už máš helpery)
+  const xFn = (km)=> x(km);
+  let pts = resampleProfileByPixels(prof, xFn, 2);
+  pts = smoothElevations(pts, 7);
+
+  // fill pod křivkou
+  ctx.save();
   ctx.beginPath();
-  prof.forEach((p,i)=>{
-    const x = (p.d/maxD)*w;
-    const y = h - ((p.e-minE)/eSpan)*(h*0.78) - h*0.08;
-    if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-  });
-
-  const grad = ctx.createLinearGradient(0,0,w,0);
-  grad.addColorStop(0,'rgba(88,255,136,0.28)');
-  grad.addColorStop(0.5,'rgba(255,212,87,0.22)');
-  grad.addColorStop(1,'rgba(96,166,255,0.24)');
-  ctx.lineWidth = 6;
-  ctx.strokeStyle = grad;
-  ctx.stroke();
-
-  ctx.lineTo(w,h);
-  ctx.lineTo(0,h);
+  ctx.moveTo(x(pts[0].distanceKm), y(pts[0].elevationM));
+  for (const p of pts) ctx.lineTo(x(p.distanceKm), y(p.elevationM));
+  ctx.lineTo(x(pts[pts.length-1].distanceKm), pad.t + ih);
+  ctx.lineTo(x(pts[0].distanceKm), pad.t + ih);
   ctx.closePath();
-  const fill = ctx.createLinearGradient(0,0,0,h);
-  fill.addColorStop(0,'rgba(88,255,136,0.14)');
-  fill.addColorStop(1,'rgba(0,0,0,0)');
+
+  const fill = ctx.createLinearGradient(0, pad.t, 0, pad.t+ih);
+  fill.addColorStop(0, 'rgba(255,255,255,.06)');
+  fill.addColorStop(1, 'rgba(0,0,0,.25)');
   ctx.fillStyle = fill;
   ctx.fill();
+  ctx.restore();
 
-  const cps = route.checkpoints || [];
-  cps.forEach((cp, idx)=>{
-    if (!Number.isFinite(cp.distanceKm) || !Number.isFinite(route.totalDistanceKm) || route.totalDistanceKm<=0) return;
-    const x = (cp.distanceKm/route.totalDistanceKm)*w;
-    ctx.strokeStyle = idx===cps.length-1 ? 'rgba(255,255,255,0.20)' : 'rgba(255,212,87,0.24)';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
-  });
+  // hladká bílá linka + glow
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.shadowColor = 'rgba(255,255,255,.25)';
+  ctx.shadowBlur = 8;
+  ctx.strokeStyle = 'rgba(255,255,255,.92)';
+
+  const P = pts.map(p=>({x:x(p.distanceKm), y:y(p.elevationM)}));
+  buildSmoothPath(ctx, P, 0.7);
+  ctx.stroke();
+  ctx.restore();
+
+  // svislé čáry checkpointů
+  const cps = Array.isArray(route.checkpoints) ? route.checkpoints : [];
+  if (cps.length && Number.isFinite(route.totalDistanceKm) && route.totalDistanceKm>0){
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,.10)';
+    ctx.lineWidth = 1;
+    cps.forEach((cp, idx)=>{
+      if (!Number.isFinite(cp.distanceKm)) return;
+      const xx = x(cp.distanceKm);
+      ctx.beginPath();
+      ctx.moveTo(xx, pad.t);
+      ctx.lineTo(xx, pad.t+ih);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  // ✅ GHOST KULIČKA (nejlepší celkový čas)
+  const bestPack = getBestPackForRoute(route);
+  if (bestPack){
+    const ride = state.ride;
+    // elapsed podle aktuální jízdy (při startu se rozjede)
+    let elapsed = 0;
+    if (ride){
+      elapsed = (ride.startMs==null) ? 0 : (ride.running ? (nowMs()-ride.startMs) : (ride.stoppedMs ?? 0));
+    }
+
+    const gKm = ghostKmAtElapsed(route, bestPack, elapsed);
+    const gEle = elevationAtKm(pts, gKm);
+    const gx = x(gKm);
+    const gy = y(gEle);
+
+    // outer glow
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(gx, gy, 8, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(40,160,255,.20)';
+    ctx.fill();
+    ctx.restore();
+
+    // ring
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(gx, gy, 6.5, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,.95)';
+    ctx.fill();
+    ctx.restore();
+
+    // inner
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(gx, gy, 3.8, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(40,160,255,.95)';
+    ctx.fill();
+    ctx.restore();
+  }
 }
+
 
 function renderRideTVCompare(route){
   const ride = state.ride;
