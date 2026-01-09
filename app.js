@@ -261,6 +261,43 @@ function getBestGhostKmAtElapsed(route, elapsedMs){
   const f = f0 + (f1 - f0) * p;
   return totalKm * clamp(f, 0, 1);
 }
+function drawMiniLabel(ctx, x, y, text){
+  ctx.save();
+  ctx.font = '700 11px -apple-system, system-ui, Segoe UI, Roboto';
+  const padX = 7, padY = 4;
+  const tw = ctx.measureText(text).width;
+  const w = tw + padX*2;
+  const h = 18;
+
+  // keep inside canvas
+  let xx = x - w/2;
+  xx = Math.max(6, Math.min(xx, ctx.canvas.width - w - 6));
+  let yy = y - h - 10;
+  yy = Math.max(6, yy);
+
+  // bg
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.beginPath();
+  const r = 8;
+  ctx.moveTo(xx+r, yy);
+  ctx.arcTo(xx+w, yy, xx+w, yy+h, r);
+  ctx.arcTo(xx+w, yy+h, xx, yy+h, r);
+  ctx.arcTo(xx, yy+h, xx, yy, r);
+  ctx.arcTo(xx, yy, xx+w, yy, r);
+  ctx.closePath();
+  ctx.fill();
+
+  // border
+  ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // text
+  ctx.fillStyle = 'rgba(255,255,255,0.92)';
+  ctx.fillText(text, xx + padX, yy + 12.5);
+
+  ctx.restore();
+}
 
 function interpEleAtKmFromProfile(profilePts, km){
   if (!Array.isArray(profilePts) || profilePts.length < 2) return null;
