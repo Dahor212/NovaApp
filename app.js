@@ -1997,6 +1997,32 @@ function svgDifficulty(kind){
     <path d="M4 12h16" stroke="rgba(255,255,255,.35)" stroke-width="3.2" stroke-linecap="round" />
   </svg>`;
 }
+function svgIcon(kind){
+  if (kind==='distance'){
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 12h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <path d="M7 9v6M17 9v6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+  }
+  if (kind==='ascent'){
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 17l5-10 5 10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+  if (kind==='diff'){
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 15c3-6 6 6 9 0s6 6 7 1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  }
+  if (kind==='trophy'){
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M8 4h8v3c0 3-2 5-4 5s-4-2-4-5V4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M10 18h4M9 20h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <path d="M8 7H5c0 3 2 5 4 5M16 7h3c0 3-2 5-4 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </svg>`;
+  }
+  return '';
+}
 
 function svgRibbon(rank){
   const fill = rank===1 ? "#ffd166" : (rank===2 ? "#cfd8dc" : "#d19a66");
