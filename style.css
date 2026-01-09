@@ -1681,4 +1681,26 @@ main.app, .app, .screen, .screenRoot, .screen-root, .screenWrap, .screen-wrap {
   height: 40px;
   border-radius: 12px;
 }
+/* ===== Action buttons ===== */
+#screenRouteDetail .actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+#screenRouteDetail .actions button {
+  height: 52px;
+  border-radius: 16px;
+  font-weight: 600;
+}
+#screenRouteDetail .btn-primary {
+  height: 58px;
+  border-radius: 18px;
+  box-shadow: 0 12px 28px rgba(0,120,255,0.45);
+  margin-top: 18px;
+}
+#screenRouteDetail {
+  padding-bottom: 24px;
+}
 
