@@ -1,7 +1,5 @@
-{
-  "files": [
-    "Holansko.gpx",
-    "Paris.gpx",
-    "Vulcano.gpx"
-  ]
-}
+[
+  { "file": "Holansko.gpx", "name": "Holansko" },
+  { "file": "Paris.gpx",    "name": "Paris" },
+  { "file": "Vulcano.gpx",  "name": "Vulcano" }
+]
