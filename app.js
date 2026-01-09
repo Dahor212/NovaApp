@@ -73,41 +73,6 @@ function colorForGrade(gradePct){
   if (g < 8) return '#ffb547';
   return '#ff5b5b';
 }
-function buildSaveLeaderboardHtml(route, currentTotalMs){
-  // všechny uložené jízdy pro trať (cíl)
-  const rides = (data.rides || []).filter(r => r.routeId === route.id && Number.isFinite(r.totalMs));
-
-  const rows = rides.map(r => ({
-    who: r.runnerName || formatDateShort(r.dateIso),
-    sub: r.note || '—',
-    t: r.totalMs,
-    me: false
-  }));
-
-  // vložíme "Ty (aktuální)" jen jako náhled
-  if (Number.isFinite(currentTotalMs)) {
-    rows.push({
-      who: 'Ty (aktuální)',
-      sub: 'neuloženo',
-      t: Math.round(currentTotalMs),
-      me: true
-    });
-  }
-
-  rows.sort((a,b)=>a.t - b.t);
-
-  const html = rows.map((r, i) => `
-    <div class="save-lb-row ${r.me ? 'me' : ''}">
-      <div class="save-lb-left">
-        <div class="save-lb-who"><span class="save-lb-rank">#${i+1}</span>${escapeHtml(r.who)}</div>
-        <div class="save-lb-sub">${escapeHtml(r.sub)}</div>
-      </div>
-      <div class="save-lb-time">${formatTimeShort(r.t)}</div>
-    </div>
-  `).join('');
-
-  return { html, count: rows.length };
-}
 
 function computeAscentDescent(profilePts){
   let up = 0, down = 0;
@@ -1881,11 +1846,7 @@ function renderRide(){
       const cp = cps[doneCount];
       const kmVal = Number.isFinite(cp?.distanceKm) ? cp.distanceKm : null;
       const kmTxt = kmVal!=null ? `${String(kmVal).replace('.',',')} km` : null;
-      const isFinish =
-  !cp ||                               // už není žádný další checkpoint => skutečný cíl
-  (doneCount >= cps.length) ||          // bezpečnostní pojistka (cíl až po projetí všech CP)
-  ((cp?.name || '').toLowerCase().includes('cíl')); // pokud bys měl CP pojmenovaný jako "Cíl"
-
+      const isFinish = !cp || (doneCount >= cps.length-1) || ((cp.name||'').toLowerCase().includes('cíl'));
       if (isFinish){
         setBtn('CÍL – Ukončit', kmTxt, 'finish');
       } else {
@@ -1896,6 +1857,7 @@ function renderRide(){
 
   // --- Tile 3 + 4 ---
     try{ renderRideTVCompare(route); }catch(e){}
+    try{ updateNextCpRankUI(route); }catch(e){}
 
   // ✅ Duel pryč (nevolat)
   const duelEl =
@@ -2326,14 +2288,6 @@ function openSaveRide(){
   const route = getCurrentRoute(); if (!route) return;
   const total = state.ride.stoppedMs ?? (nowMs()-state.ride.startMs);
   const marks = state.ride.marks;
-// NOVĚ: posuvný kompletní žebříček v ukládacím okně
-try{
-  const lb = buildSaveLeaderboardHtml(route, total);
-  const body = $('#saveLbBody');
-  const cnt  = $('#saveLbCount');
-  if (body) body.innerHTML = lb.html || '<div class="hint subtle">Zatím žádné záznamy.</div>';
-  if (cnt) cnt.textContent = String(lb.count || 0);
-}catch(e){}
 
   const lines = [];
   lines.push(`<b>Trať:</b> ${escapeHtml(route.name)}`);
@@ -2346,6 +2300,7 @@ try{
   if (!$('#rideRunnerName').value){
     $('#rideRunnerName').value = `Pokus ${new Date().toLocaleDateString('cs-CZ')}`;
   }
+  renderSaveRideLeaderboard(route.id, total);
   openModal('modalSaveRide');
 }
 
@@ -3035,3 +2990,127 @@ function stopTicker(){
 state.source = loadSource();
 updateSourceUi();
 showScreen('source');
+
+// ===== Next checkpoint live ranking (predicted) =====
+function getCpLeaderboard(routeId, cpIdx){
+  const data = loadData();
+  const rows = (data.rides || [])
+    .filter(r => r.routeId === routeId && Array.isArray(r.splits) && r.splits[cpIdx] != null)
+    .map(r => ({
+      id: r.id,
+      name: r.name || 'Pokus',
+      ms: r.splits[cpIdx],
+      date: r.date || r.ts || 0
+    }))
+    .sort((a,b)=> a.ms - b.ms);
+  return rows;
+}
+
+function renderMiniRankRows(containerEl, rows){
+  if (!containerEl) return;
+  containerEl.innerHTML = '';
+  rows.forEach((r)=>{
+    const row = document.createElement('div');
+    row.className = 'tv-rank-row' + (r.isYou ? ' you' : '');
+    row.innerHTML = `
+      <div class="tv-rank-left">
+        <div class="pill small">${r.rankLabel}</div>
+        <div class="tv-rank-name">${escapeHtml(r.name)}</div>
+      </div>
+      <div class="tv-rank-time">${fmtMs(r.ms)}</div>
+    `;
+    containerEl.appendChild(row);
+  });
+}
+
+function updateNextCpRankUI(route){
+  const pill = document.querySelector('#nextCpPill');
+  const rowsEl = document.querySelector('#nextCpRankRows');
+  const hintEl = document.querySelector('#nextCpHint');
+  if (!pill || !rowsEl) return;
+
+  const cps = route.checkpoints || [];
+  if (!state.ride || !state.ride.running){
+    rowsEl.innerHTML = '<div class="mini">—</div>';
+    pill.textContent = 'CP —';
+    if (hintEl) hintEl.textContent = 'Po startu uvidíš průběžné pořadí na nejbližším checkpointu.';
+    return;
+  }
+
+  const passed = (state.ride.marks || []).length; // pouze checkpointy (bez cíle)
+  if (passed >= cps.length){
+    rowsEl.innerHTML = '<div class="mini">—</div>';
+    pill.textContent = 'CP —';
+    if (hintEl) hintEl.textContent = 'Checkpointy dokončeny.';
+    return;
+  }
+
+  pill.textContent = 'CP ' + (passed + 1);
+
+  const lb = getCpLeaderboard(route.id, passed); // kumulativní čas do následujícího CP
+  const yourMs = getRideElapsedMs(); // aktuální čas => predikce času do CP
+
+  const mix = lb.map(x=>({...x}));
+  mix.push({ id:'__you__', name:'Ty', ms: yourMs, isYou:true, date: Date.now() });
+  mix.sort((a,b)=> a.ms - b.ms);
+
+  const youPos = mix.findIndex(x=>x.id==='__you__');
+  const prev = mix[youPos-1];
+  const next = mix[youPos+1];
+
+  const rows = [];
+  if (prev) rows.push({ ...prev, rankLabel: '#' + (youPos), isYou:false });
+  rows.push({ id:'__you__', name:'Ty', ms: yourMs, isYou:true, rankLabel: '#' + (youPos+1) });
+  if (next) rows.push({ ...next, rankLabel: '#' + (youPos+2), isYou:false });
+
+  renderMiniRankRows(rowsEl, rows);
+
+  if (hintEl){
+    if (prev && next) hintEl.textContent = `Jsi mezi ${prev.name} a ${next.name}.`;
+    else if (prev) hintEl.textContent = `Před tebou je ${prev.name}.`;
+    else if (next) hintEl.textContent = `Zatím vedeš – za tebou je ${next.name}.`;
+    else hintEl.textContent = 'Zatím jediný záznam pro tento checkpoint.';
+  }
+}
+
+
+function renderSaveRideLeaderboard(routeId, yourTotalMs){
+  const el = document.querySelector('#saveRideLeaderboard');
+  if (!el) return;
+  const data = loadData();
+  const rides = (data.rides || []).filter(r => r.routeId === routeId);
+  rides.sort((a,b)=> (a.totalMs??a.finishMs??0) - (b.totalMs??b.finishMs??0));
+  const rows = rides.slice(0, 50).map((r, idx)=>({
+    rank: idx+1,
+    name: r.name || 'Pokus',
+    ms: r.totalMs ?? r.finishMs,
+    isYou:false
+  }));
+  // insert current attempt ("Ty") as preview (not saved yet)
+  if (yourTotalMs != null){
+    rows.push({rank:null, name:'Ty (tento pokus)', ms: yourTotalMs, isYou:true});
+    rows.sort((a,b)=> a.ms - b.ms);
+    rows.forEach((r, idx)=> r.rank = idx+1);
+  }
+  const frag = document.createDocumentFragment();
+  el.innerHTML = '';
+  rows.slice(0, 20).forEach((r)=>{
+    const row = document.createElement('div');
+    row.className = 'leader-row' + (r.isYou ? ' you' : '');
+    row.innerHTML = `
+      <div class="leader-left">
+        <div class="pill small">#${r.rank}</div>
+        <div class="leader-name">${escapeHtml(r.name)}</div>
+      </div>
+      <div class="leader-time">${fmtMs(r.ms)}</div>
+    `;
+    frag.appendChild(row);
+  });
+  el.appendChild(frag);
+}
+
+on('#btnOpenFullLeaderboard','click', ()=>{
+  const route = getCurrentRoute(); if (!route) return;
+  closeModal('modalSaveRide');
+  showLeaderboard(route.id);
+});
