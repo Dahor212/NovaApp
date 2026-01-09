@@ -850,30 +850,30 @@ function renderRoutes(){
     el.className = `route-item route-tile bg-${band}`;
     el.dataset.band = band;
 
-    // ikony (inline svg) – bez externích souborů
-    const svgUp = `<svg class="rt-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l6 7h-4v9H10v-9H6l6-7z" fill="currentColor"/></svg>`;
-    const svgClock = `<svg class="rt-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20zm1-10.4V6h-2v6.2l5 3 .9-1.5-3.9-2.3z" fill="currentColor"/></svg>`;
-    const svgTrophy = `<svg class="rt-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-3V2H8v2H5v4a5 5 0 0 0 5 5h.1A6 6 0 0 0 11 16v2H8v2h8v-2h-3v-2a6 6 0 0 0 .9-3H14a5 5 0 0 0 5-5V4zm-2 4a3 3 0 0 1-3 3V6h3v2zM7 8V6h3v5a3 3 0 0 1-3-3z" fill="currentColor"/></svg>`;
+    const svgDist = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a10 10 0 1 1 0-20 10 10 0 0 1 0 20zm1-10.4V6h-2v6.2l5 3 .9-1.5-3.9-2.3z" fill="currentColor"/></svg>`;
+const svgUp   = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l6 7h-4v9H10v-9H6l6-7z" fill="currentColor"/></svg>`;
+const svgTrophy = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 4h-3V2H8v2H5v4a5 5 0 0 0 5 5h.1A6 6 0 0 0 11 16v2H8v2h8v-2h-3v-2a6 6 0 0 0 .9-3H14a5 5 0 0 0 5-5V4zm-2 4a3 3 0 0 1-3 3V6h3v2zM7 8V6h3v5a3 3 0 0 1-3-3z" fill="currentColor"/></svg>`;
+const svgPin = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2l-1 7 3 3-4 4-3-3-7 1 8-8 4-4zM5 19l4-1-3-3-1 4z" fill="currentColor"/></svg>`;
 
-    el.innerHTML = `
-      <div class="route-tile__inner">
-        <div class="route-tile__panel">
-          <div class="route-tile__title">${escapeHtml(route.name || 'Trať')}</div>
+el.innerHTML = `
+  <div class="route-tile__inner">
+    <div class="route-tile__content">
+      <div class="route-tile__title">${escapeHtml(route.name || 'Trať')}</div>
 
-          <div class="route-tile__meta">
-            <span class="rt-badge">${svgClock}<span>${distText}</span></span>
-            <span class="rt-badge">${svgUp}<span>${ascText}</span></span>
-            <span class="rt-badge"><span style="font-weight:800">${diffIcon}</span><span>${diffLabel}</span></span>
-            <span class="rt-badge">${svgTrophy}<span>${bestText}</span></span>
-            <span class="rt-badge"><span style="opacity:.95">📌</span><span>${count} záznamů</span></span>
-          </div>
-        </div>
-
-        <svg class="chev" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
+      <div class="route-tile__chips">
+        <span class="rt-chip">${svgDist}<span>${distText}</span></span>
+        <span class="rt-chip">${svgUp}<span>${ascText}</span></span>
+        <span class="rt-chip diff"><span style="font-weight:900">${diffIcon}</span><span>${diffLabel}</span></span>
+        <span class="rt-chip">${svgTrophy}<span>${bestText}</span></span>
+        <span class="rt-chip">${svgPin}<span>${count} záznamů</span></span>
       </div>
-    `;
+    </div>
+
+    <svg class="chev" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M10 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </div>
+`;
 
     el.addEventListener('click', ()=>{
       state.currentRouteId = route.id;
