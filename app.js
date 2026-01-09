@@ -1846,7 +1846,11 @@ function renderRide(){
       const cp = cps[doneCount];
       const kmVal = Number.isFinite(cp?.distanceKm) ? cp.distanceKm : null;
       const kmTxt = kmVal!=null ? `${String(kmVal).replace('.',',')} km` : null;
-      const isFinish = !cp || (doneCount >= cps.length-1) || ((cp.name||'').toLowerCase().includes('cíl'));
+      const isFinish =
+  !cp ||                               // už není žádný další checkpoint => skutečný cíl
+  (doneCount >= cps.length) ||          // bezpečnostní pojistka (cíl až po projetí všech CP)
+  ((cp?.name || '').toLowerCase().includes('cíl')); // pokud bys měl CP pojmenovaný jako "Cíl"
+
       if (isFinish){
         setBtn('CÍL – Ukončit', kmTxt, 'finish');
       } else {
