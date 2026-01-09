@@ -1480,4 +1480,70 @@ html, body{
   font-weight: 800;
   text-shadow: 0 10px 26px rgba(0,0,0,.55);
 }
+/* ===========================
+   GLOBAL: remove outer "shell card"
+   (the extra border/edge you marked)
+   =========================== */
+.appShell, .app-shell, .shell, .screenShell, .screen-shell,
+.phone, .device, .frame, .outerCard, .outer-card, .pageFrame, .page-frame,
+main.app, .app, .screen, .screenRoot, .screen-root, .screenWrap, .screen-wrap {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: none !important;
+  outline: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* If there's a pseudo-element creating a glass layer */
+.appShell::before, .app-shell::before, .shell::before, .screen::before, .app::before,
+.appShell::after,  .app-shell::after,  .shell::after,  .screen::after,  .app::after {
+  content: none !important;
+  display: none !important;
+}
+/* Make content take full width after removing shell */
+.screenContent, .screen-content, .content, .pageContent, .page-content {
+  width: 100%;
+  max-width: 100%;
+}
+:root{
+  --card-radius: 22px;
+  --card-gap: 14px;
+  --card-pad: 16px;
+}
+
+/* universal nicer card */
+.card, .glassCard, .panel, .sectionCard, .routeCard{
+  border-radius: var(--card-radius);
+  padding: var(--card-pad);
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.10);
+  box-shadow:
+    0 14px 34px rgba(0,0,0,.28),
+    inset 0 1px 0 rgba(255,255,255,.08);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+/* spacing between stacked cards in detail screen */
+.routeDetail, .route-detail, .detailScreen, .detail-screen, .contentColumn, .content-column{
+  display: flex;
+  flex-direction: column;
+  gap: var(--card-gap);
+}
+
+/* Make buttons less "heavy" and more airy */
+.btn, button{
+  border-radius: 18px;
+  box-shadow: 0 10px 24px rgba(0,0,0,.20), inset 0 1px 0 rgba(255,255,255,.10);
+}
+
+/* Profile canvas container should not be white */
+#profileCanvas{
+  display:block;
+  width:100%;
+  height:160px;
+  background: transparent !important;
+  border-radius: 14px;
+}
 
