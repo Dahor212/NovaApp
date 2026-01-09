@@ -42,7 +42,7 @@ const PENDING_KEY = 'splittimer:pendingSync:v1';
 const GPX_INDEX_URL = './Gpx/index.json';
 const GPX_BASE_PATH = './Gpx/';
 // ===== Profile helpers (MUST be defined before drawProfile) =====
-function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
 
 // ===== TV-style profile helpers =====
 function clamp01(x){ return Math.max(0, Math.min(1, x)); }
