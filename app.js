@@ -1922,15 +1922,52 @@ function drawMiniProfile(route, ghostKm){
   ctx.fillStyle = fill;
   ctx.fill();
 
-  // checkpoint lines
-  const cps = route.checkpoints || [];
+    // ✅ checkpoint lines + best split labels (mezičasy)
+  const cps = Array.isArray(route.checkpoints) ? route.checkpoints : [];
+  const totalKm = Number.isFinite(route.totalDistanceKm) ? route.totalDistanceKm : maxD;
+
+  // best splits (cumulative) from best overall ride
+  const best = getBestTimes(route.id); // {finishMs, splits}
+  const bestSplits = (best && Array.isArray(best.splits)) ? best.splits : [];
+
   cps.forEach((cp, idx)=>{
-    if (!Number.isFinite(cp.distanceKm) || !Number.isFinite(route.totalDistanceKm) || route.totalDistanceKm<=0) return;
-    const x = (cp.distanceKm/route.totalDistanceKm)*w;
-    ctx.strokeStyle = idx===cps.length-1 ? 'rgba(255,255,255,0.20)' : 'rgba(255,212,87,0.24)';
+    const kmVal = Number.isFinite(cp.distanceKm) ? cp.distanceKm : null;
+    if (!Number.isFinite(kmVal) || !Number.isFinite(totalKm) || totalKm<=0) return;
+
+    const xLine = (kmVal / totalKm) * w;
+
+    // vertical marker
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
     ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(xLine, 6); ctx.lineTo(xLine, h-6); ctx.stroke();
+    ctx.restore();
+
+    // dot on the curve
+    const ele = interpEleAtKmFromProfile(pts, kmVal);
+    if (ele != null){
+      const yCurve = h - ((ele-minE)/eSpan)*(h*0.78) - h*0.08;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(xLine, yCurve, 5.5, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(255,255,255,0.90)';
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(xLine, yCurve, 3, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fill();
+      ctx.restore();
+
+      // ✅ label = best split time at this checkpoint (if exists)
+      const t = Number.isFinite(bestSplits[idx]) ? bestSplits[idx] : null;
+      if (t != null && t > 0){
+        drawMiniLabel(ctx, xLine, yCurve, formatTime(t)); // "00:00:12"
+      }
+    }
   });
+
 
   // ✅ SMOOTH ghost dot (best overall) – draw on the line
   if (Number.isFinite(ghostKm)){
