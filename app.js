@@ -2326,6 +2326,14 @@ function openSaveRide(){
   const route = getCurrentRoute(); if (!route) return;
   const total = state.ride.stoppedMs ?? (nowMs()-state.ride.startMs);
   const marks = state.ride.marks;
+// NOVĚ: posuvný kompletní žebříček v ukládacím okně
+try{
+  const lb = buildSaveLeaderboardHtml(route, total);
+  const body = $('#saveLbBody');
+  const cnt  = $('#saveLbCount');
+  if (body) body.innerHTML = lb.html || '<div class="hint subtle">Zatím žádné záznamy.</div>';
+  if (cnt) cnt.textContent = String(lb.count || 0);
+}catch(e){}
 
   const lines = [];
   lines.push(`<b>Trať:</b> ${escapeHtml(route.name)}`);
