@@ -2290,28 +2290,20 @@ function drawProfile(route){
   if (!canvas) return;
 
   const ctx = canvas.getContext('2d');
-
-  // HiDPI + reset transform
   const rect = canvas.getBoundingClientRect();
   const dpr = Math.max(1, window.devicePixelRatio || 1);
+
   canvas.width  = Math.floor(rect.width * dpr);
   canvas.height = Math.floor(rect.height * dpr);
   ctx.setTransform(dpr,0,0,dpr,0,0);
 
   const w = rect.width;
   const h = rect.height;
-
-  // Background transparent (panel dělá card v UI, ne canvas)
   ctx.clearRect(0,0,w,h);
 
   const prof = Array.isArray(route.profile) ? route.profile : [];
   if (prof.length < 2){
-    // subtle placeholder
     ctx.save();
-    ctx.fillStyle = 'rgba(255,255,255,.08)';
-    roundRect(ctx, 0, 0, w, h, 14, 'rgba(0,0,0,0)');
-    ctx.fillRect(0,0,w,h);
-
     ctx.fillStyle = 'rgba(255,255,255,.75)';
     ctx.font = '700 14px -apple-system, system-ui, Segoe UI, Roboto';
     ctx.fillText('Profil zatím není (importuj GPX)', 14, 22);
@@ -2319,22 +2311,25 @@ function drawProfile(route){
     return;
   }
 
-  // Normalize points: očekáváme {distanceKm, elevationM}
-  const pts = prof.map(p => ({
+  // normalize
+  let pts0 = prof.map(p=>({
     distanceKm: Number(p.distanceKm),
     elevationM: Number(p.elevationM)
-  })).filter(p => Number.isFinite(p.distanceKm) && Number.isFinite(p.elevationM));
+  })).filter(p=>Number.isFinite(p.distanceKm)&&Number.isFinite(p.elevationM));
 
-  if (pts.length < 2) return;
+  if(pts0.length < 2) return;
 
-  const maxD = pts[pts.length-1].distanceKm || 1;
+  // sort by distance
+  pts0.sort((a,b)=>a.distanceKm-b.distanceKm);
+
+  const maxD = pts0[pts0.length-1].distanceKm || 1;
 
   // min/max elevation
-  let minE = Infinity, maxE = -Infinity;
-  for (const p of pts){ minE = Math.min(minE, p.elevationM); maxE = Math.max(maxE, p.elevationM); }
-  if (minE === maxE) maxE = minE + 1;
+  let minE=Infinity, maxE=-Infinity;
+  for(const p of pts0){ minE=Math.min(minE,p.elevationM); maxE=Math.max(maxE,p.elevationM); }
+  if(minE===maxE) maxE=minE+1;
 
-  // padding inside canvas
+  // padding
   const pad = { l: 12, r: 12, t: 10, b: 22 };
   const innerW = w - pad.l - pad.r;
   const innerH = h - pad.t - pad.b;
@@ -2342,38 +2337,140 @@ function drawProfile(route){
   const x = (km)=> pad.l + (km/maxD)*innerW;
   const y = (m)=> pad.t + (1 - (m-minE)/(maxE-minE))*innerH;
 
-  // --- Grid (subtle) ---
+  // --- subtle grid ---
   ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,.10)';
+  ctx.strokeStyle = 'rgba(255,255,255,.08)';
   ctx.lineWidth = 1;
-
-  for (let i=0;i<=3;i++){
+  for(let i=0;i<=3;i++){
     const yy = pad.t + innerH*(i/3);
-    ctx.beginPath(); ctx.moveTo(pad.l, yy); ctx.lineTo(w-pad.r, yy); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad.l,yy); ctx.lineTo(w-pad.r,yy); ctx.stroke();
   }
-  // vertical ticks at 0 / 1/3 / 2/3 / end
   const ticks = [0, maxD/3, 2*maxD/3, maxD];
   ticks.forEach(t=>{
-    const xx = x(t);
-    ctx.beginPath(); ctx.moveTo(xx, pad.t); ctx.lineTo(xx, pad.t+innerH); ctx.stroke();
+    const xx=x(t);
+    ctx.beginPath(); ctx.moveTo(xx,pad.t); ctx.lineTo(xx,pad.t+innerH); ctx.stroke();
   });
   ctx.restore();
 
-  // --- Area fill base (dark wash) ---
+  // --- resample + smooth (THIS is the key to make the line nice) ---
+  const xFn = (km)=> x(km);
+  let pts = resampleProfileByPixels(pts0, xFn, 2); // every ~2 px
+  pts = smoothElevations(pts, 7);                 // smooth more = prettier line
+
+  // precompute pixel points
+  const P = pts.map(p=>({ x: x(p.distanceKm), y: y(p.elevationM), km:p.distanceKm, ele:p.elevationM }));
+
+  // --- ascent / descent text ---
+  const ad = computeAscentDescent(pts);
+  ctx.save();
+  ctx.font = '800 13px -apple-system, system-ui, Segoe UI, Roboto';
+  ctx.fillStyle = 'rgba(255,255,255,.85)';
+  ctx.fillText(`+${ad.up} m`, pad.l, pad.t+14);
+  ctx.fillStyle = 'rgba(255,255,255,.65)';
+  ctx.fillText(` -${ad.down} m klesání`, pad.l + 78, pad.t+14);
+  ctx.restore();
+
+  // --- colored "heat" under the line (grade) as soft glow segments ---
+  for(let i=1;i<P.length;i++){
+    const a=P[i-1], b=P[i];
+    const dxKm = (b.km - a.km);
+    if(dxKm<=0) continue;
+    const de = (b.ele - a.ele);
+    const gradePct = (de / (dxKm*1000)) * 100;
+    const col = colorForGrade(gradePct);
+
+    // soft vertical tint under segment (not jagged stroke)
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(a.x,a.y);
+    ctx.lineTo(b.x,b.y);
+    ctx.lineTo(b.x,pad.t+innerH);
+    ctx.lineTo(a.x,pad.t+innerH);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // --- nice filled area under curve (dark glass) ---
   ctx.save();
   ctx.beginPath();
-  ctx.moveTo(x(pts[0].distanceKm), y(pts[0].elevationM));
-  for (const p of pts) ctx.lineTo(x(p.distanceKm), y(p.elevationM));
-  ctx.lineTo(x(pts[pts.length-1].distanceKm), pad.t+innerH);
-  ctx.lineTo(x(pts[0].distanceKm), pad.t+innerH);
+  ctx.moveTo(P[0].x, P[0].y);
+  for(const p of P) ctx.lineTo(p.x,p.y);
+  ctx.lineTo(P[P.length-1].x, pad.t+innerH);
+  ctx.lineTo(P[0].x, pad.t+innerH);
   ctx.closePath();
 
-  const wash = ctx.createLinearGradient(0, pad.t, 0, pad.t+innerH);
-  wash.addColorStop(0, 'rgba(0,0,0,.08)');
-  wash.addColorStop(1, 'rgba(0,0,0,.30)');
-  ctx.fillStyle = wash;
+  const fillGrad = ctx.createLinearGradient(0, pad.t, 0, pad.t+innerH);
+  fillGrad.addColorStop(0, 'rgba(0,0,0,.06)');
+  fillGrad.addColorStop(1, 'rgba(0,0,0,.28)');
+  ctx.fillStyle = fillGrad;
   ctx.fill();
   ctx.restore();
+
+  // --- main smooth line (white-ish) + glow ---
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap  = 'round';
+
+  // glow
+  ctx.strokeStyle = 'rgba(255,255,255,.20)';
+  ctx.lineWidth = 6;
+  buildSmoothPath(ctx, P, 0.65);
+  ctx.stroke();
+
+  // main line
+  ctx.strokeStyle = 'rgba(255,255,255,.78)';
+  ctx.lineWidth = 2.6;
+  buildSmoothPath(ctx, P, 0.65);
+  ctx.stroke();
+
+  ctx.restore();
+
+  // --- x-axis labels ---
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,.72)';
+  ctx.font = '700 12px -apple-system, system-ui, Segoe UI, Roboto';
+
+  const nice = [0, 2, 3, 4, Math.round(maxD)];
+  nice.forEach(v=>{
+    if(v<0 || v>maxD) return;
+    const xx = x(v);
+    const text = `${v} km`;
+    const tw = ctx.measureText(text).width;
+    ctx.fillText(text, xx - tw/2, h-6);
+  });
+  ctx.restore();
+
+  // --- checkpoints markers on correct place ---
+  const cps = (route.checkpoints || []).filter(c => Number.isFinite(c.distanceKm));
+  cps.forEach((cp, idx)=>{
+    const cx = x(cp.distanceKm);
+    const elev = nearestElevationKm(cp.distanceKm, pts);
+    const cy = y(elev);
+
+    const isStart = idx===0;
+    const isEnd = idx===cps.length-1;
+    const fill = isEnd ? '#ff5b5b' : (isStart ? '#4fe38b' : '#ffd166');
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 7.2, 0, Math.PI*2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0,0,0,.35)';
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, 3.2, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,.9)';
+    ctx.fill();
+    ctx.restore();
+  });
+}
+
 
   // --- Colored segments by grade (TV style) ---
   // Draw thick polyline in segments + glow
