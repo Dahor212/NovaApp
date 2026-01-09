@@ -1552,4 +1552,28 @@ main.app, .app, .screen, .screenRoot, .screen-root, .screenWrap, .screen-wrap {
 .app::after,  .screen::after,  .page::after {
   pointer-events: none !important;
 }
+/* ===== Route detail: remove the big outer card/wrapper ===== */
+
+/* ČASTÉ WRAPPERY – upravíme je bezpečně "na neviditelno" */
+#screenRouteDetail .card,
+#screenRouteDetail .panel,
+#screenRouteDetail .sheet,
+#screenRouteDetail .route-card,
+#screenRouteDetail .content-card,
+#screenRouteDetail .big-card {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+/* Pokud máš konkrétní wrapper kolem sekcí (často bývá .stack / .wrap / .route-detail) */
+#screenRouteDetail .stack,
+#screenRouteDetail .wrap,
+#screenRouteDetail .route-detail,
+#screenRouteDetail .route-detail-wrap {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
 
