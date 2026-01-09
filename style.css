@@ -1232,4 +1232,121 @@ html, body{
 .app-container{
   background: transparent !important;
 }
+/* =========================================
+   ROUTE TILES – 1 vrstva + chips (clean)
+   ========================================= */
+
+/* zruší "vnější list card" */
+#routesList.list{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* samotná dlaždice */
+.route-item.route-tile{
+  position: relative;
+  border-radius: 22px;
+  overflow: hidden;
+  margin: 14px 14px 0 14px;
+  min-height: 122px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.28);
+  border: 1px solid rgba(255,255,255,.12);
+}
+
+/* vnitřek – žádný panel, jen rozložení obsahu */
+.route-tile__inner{
+  position: relative;
+  min-height: 122px;
+  padding: 14px 14px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+/* jemný gradient, aby text byl čitelný, ale nezabil pozadí */
+.route-tile__inner::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background: linear-gradient(90deg,
+    rgba(0,0,0,.38) 0%,
+    rgba(0,0,0,.20) 55%,
+    rgba(0,0,0,.00) 100%);
+  pointer-events:none;
+}
+
+/* obsah vlevo nad gradientem */
+.route-tile__content{
+  position: relative;
+  z-index: 2;
+  width: calc(100% - 46px);
+}
+
+/* název */
+.route-tile__title{
+  margin: 0 0 10px 0;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: .2px;
+  color: rgba(255,255,255,.96);
+  text-shadow: 0 8px 20px rgba(0,0,0,.35);
+}
+
+/* grid pro chips */
+.route-tile__chips{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: center;
+}
+
+/* jednotlivá bublina */
+.rt-chip{
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.14);
+  border: 1px solid rgba(255,255,255,.14);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  color: rgba(255,255,255,.92);
+  font-size: 13px;
+  line-height: 1;
+}
+
+/* ikona uvnitř chipu */
+.rt-chip svg{
+  width: 14px;
+  height: 14px;
+  opacity: .95;
+}
+
+/* chip pro "difficulty" jemně odlišit */
+.rt-chip.diff{
+  background: rgba(0,0,0,.18);
+}
+
+/* pravá šipka */
+.route-tile .chev{
+  position: relative;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  opacity: .90;
+  color: rgba(255,255,255,.95);
+  filter: drop-shadow(0 10px 18px rgba(0,0,0,.45));
+}
+
+/* pozadí více viditelné */
+.overlay{
+  opacity: .18 !important;
+}
+.app-container{
+  background: transparent !important;
+}
 
