@@ -41,6 +41,28 @@ const PENDING_KEY = 'splittimer:pendingSync:v1';
 // ✅ NOVÉ: kde leží GPX v repu
 const GPX_INDEX_URL = './Gpx/index.json';
 const GPX_BASE_PATH = './Gpx/';
+// ===== Profile helpers (MUST be defined before drawProfile) =====
+function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+
+function colorForGrade(gradePct){
+  // gradePct: +8 = 8% uphill, -6 = 6% downhill
+  const g = Math.max(-18, Math.min(18, Number(gradePct) || 0));
+  if (g >= 0){
+    // green (uphill) – stronger for steeper
+    const t = clamp01(g / 12);
+    const r = Math.round(40 + 20*t);
+    const gch = Math.round(210 - 35*t);
+    const b = Math.round(110 - 30*t);
+    return `rgba(${r},${gch},${b},0.95)`;
+  } else {
+    // blue (downhill) – stronger for steeper
+    const t = clamp01((-g) / 12);
+    const r = Math.round(80 - 10*t);
+    const gch = Math.round(160 - 20*t);
+    const b = Math.round(255 - 10*t);
+    return `rgba(${r},${gch},${b},0.95)`;
+  }
+}
 
 
 // ✅ NOVÉ: krok profilu (v metrech) – ukládá se do DB
