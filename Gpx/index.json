@@ -1,5 +1,6 @@
 [
   { "file": "Holansko.gpx", "name": "Holansko" },
   { "file": "Paris.gpx",    "name": "Paris" },
-  { "file": "Vulcano.gpx",  "name": "Vulcano" }
+  { "file": "Vulcano.gpx",  "name": "Vulcano" },
+  { "file": "parisroadrace.gpx",  "name": "Paris - short road rece" }
 ]
