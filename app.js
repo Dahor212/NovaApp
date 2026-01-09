@@ -2248,13 +2248,25 @@ function drawProfile(route){
   ctx.fillStyle = grad;
   ctx.fill();
 
-  // ridge line
-  ctx.beginPath();
-  ctx.moveTo(x(pts[0].distanceKm), y(pts[0].elevationM));
-  for (const p of pts){ ctx.lineTo(x(p.distanceKm), y(p.elevationM)); }
-  ctx.strokeStyle = 'rgba(14,54,24,.55)';
-  ctx.lineWidth = 2;
-  ctx.stroke();
+    // TV style line: segment-by-segment colored by grade
+  ctx.lineWidth = 3.2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  for (let i=1;i<pts.length;i++){
+    const p0 = pts[i-1], p1 = pts[i];
+    const dKm = Math.max(0.001, (p1.distanceKm - p0.distanceKm));
+    const dEle = (p1.elevationM - p0.elevationM);
+    const gradePct = (dEle / (dKm*1000)) * 100; // %
+
+    ctx.strokeStyle = colorForGrade(gradePct);
+
+    ctx.beginPath();
+    ctx.moveTo(x(p0.distanceKm), y(p0.elevationM));
+    ctx.lineTo(x(p1.distanceKm), y(p1.elevationM));
+    ctx.stroke();
+  }
+
 
   // axes labels (simple)
   ctx.fillStyle = '#223';
