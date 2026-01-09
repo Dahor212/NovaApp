@@ -22,6 +22,11 @@ const state = {
 
   currentRouteId: null,
   ride: null, // {routeId, startMs, running, marks:[{cpId, ms}], stoppedMs}
+
+  // ✅ NOVÉ: cache pro create-route z GPX
+  gpxIndex: null,            // [{file,name}]
+  newRouteComputed: null,    // {gpxUrl,totalDistanceKm,totalAscentM,profileStepM,profileEleM,profilePoints}
+  newRouteSelectedFile: null // string
 };
 
 const STORAGE_KEY = 'splittimer:data:v1';
@@ -32,6 +37,16 @@ const SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbwaBWzuDwfU6-xQ4
 const SHEETS_API_SECRET = 'st_pRrN8e6Lgkh2A5SThDEKpek4qZZL_0pr';
 const APP_VERSION = 'pwa-v26-sheets-db';
 const PENDING_KEY = 'splittimer:pendingSync:v1';
+
+// ✅ NOVÉ: kde leží GPX v repu
+const GPX_INDEX_URL = '/Gpx/index.json';
+const GPX_BASE_PATH = '/Gpx/';
+
+// ✅ NOVÉ: krok profilu (v metrech) – ukládá se do DB
+const DEFAULT_PROFILE_STEP_M = 20;
+
+// ✅ NOVÉ: max bodů pro route.profile pro canvas (nezatěžuje UI)
+const PROFILE_MAX_POINTS_UI = 350;
 
 function getDeviceId(){
   let id = localStorage.getItem('splittimer:deviceId:v1');
@@ -105,20 +120,85 @@ function sheetsJsonp(action, payload) {
   });
 }
 
+function safeJsonParse(str, fallback){
+  try { return JSON.parse(str); } catch(e){ return fallback; }
+}
+
+// ✅ NOVÉ: z DB (profileStepM + profileEleM) vytvoří route.profile pro vykreslení
+function buildProfilePointsFromStepEle(totalDistanceKm, profileStepM, profileEleM){
+  const stepM = Number(profileStepM);
+  const eleArr = Array.isArray(profileEleM) ? profileEleM : [];
+  if (!Number.isFinite(stepM) || stepM <= 0 || eleArr.length < 2) return [];
+
+  // Pokud distanceKm neznáme, odvodíme z délky pole
+  let totalM = Number.isFinite(totalDistanceKm) ? Math.round(totalDistanceKm * 1000) : ((eleArr.length - 1) * stepM);
+  if (!Number.isFinite(totalM) || totalM <= 0) totalM = (eleArr.length - 1) * stepM;
+
+  const out = [];
+  for (let i=0;i<eleArr.length;i++){
+    const dM = i * stepM;
+    if (dM > totalM + stepM) break;
+    out.push({ distanceKm: dM / 1000, elevationM: Number(eleArr[i]) });
+  }
+
+  // dorovnej poslední bod přesně na totalDistanceKm, pokud je známá
+  if (Number.isFinite(totalDistanceKm) && out.length){
+    const last = out[out.length - 1];
+    last.distanceKm = totalDistanceKm;
+  }
+  return out;
+}
+
 async function refreshFromSheets(source){
   const src = source || state.source || loadSource() || '';
   const resp = await sheetsJsonp('getAll', { source: src });
 
-  const routes = (resp.routes || []).map(r => ({
-    id: String(r.routeId),
-    source: String(r.source || ''),
-    name: String(r.name || ''),
-    totalDistanceKm: (r.totalDistanceKm === '' || r.totalDistanceKm == null) ? null : Number(r.totalDistanceKm),
-    totalAscentM: (r.totalAscentM === '' || r.totalAscentM == null) ? null : Number(r.totalAscentM),
-    difficulty: String(r.difficulty || ''),
-    checkpoints: [],
-    profile: []
-  }));
+  const routes = (resp.routes || []).map(r => {
+    const totalDistanceKm = (r.totalDistanceKm === '' || r.totalDistanceKm == null) ? null : Number(r.totalDistanceKm);
+    const totalAscentM = (r.totalAscentM === '' || r.totalAscentM == null) ? null : Number(r.totalAscentM);
+
+    const gpxUrl = (r.gpxUrl === '' || r.gpxUrl == null) ? null : String(r.gpxUrl);
+    const profileStepM = (r.profileStepM === '' || r.profileStepM == null) ? null : Number(r.profileStepM);
+
+    // profileEleM může být:
+    // - už pole (když GAS vrací JSON)
+    // - nebo string s JSON
+    let profileEleM = [];
+    if (Array.isArray(r.profileEleM)) {
+      profileEleM = r.profileEleM;
+    } else if (typeof r.profileEleM === 'string' && r.profileEleM.trim()) {
+      profileEleM = safeJsonParse(r.profileEleM, []);
+    } else if (typeof r.profileEleM === 'number') {
+      profileEleM = [];
+    } else if (typeof r.profileEleM === 'object' && r.profileEleM != null) {
+      // fallback
+      profileEleM = [];
+    }
+
+    // route.profile pro UI
+    const profilePoints = (profileStepM && profileEleM && profileEleM.length >= 2)
+      ? buildProfilePointsFromStepEle(totalDistanceKm, profileStepM, profileEleM)
+      : [];
+
+    const uiProfile = profilePoints.length
+      ? downsampleProfile(profilePoints, PROFILE_MAX_POINTS_UI).map(p => ({ distanceKm: p.distanceKm, elevationM: p.elevationM }))
+      : [];
+
+    return ({
+      id: String(r.routeId),
+      source: String(r.source || ''),
+      name: String(r.name || ''),
+      totalDistanceKm: Number.isFinite(totalDistanceKm) ? totalDistanceKm : null,
+      totalAscentM: Number.isFinite(totalAscentM) ? totalAscentM : null,
+      difficulty: String(r.difficulty || ''),
+      gpxUrl,
+      profileStepM: Number.isFinite(profileStepM) ? profileStepM : null,
+      profileEleM: Array.isArray(profileEleM) ? profileEleM : [],
+      checkpoints: [],
+      profile: uiProfile
+    });
+  });
+
   const byId = new Map(routes.map(r => [r.id, r]));
   (resp.checkpoints || []).forEach(c => {
     const route = byId.get(String(c.routeId));
@@ -175,7 +255,11 @@ async function syncRideToSheets(rideId){
     name: route.name || '',
     totalDistanceKm: route.totalDistanceKm ?? '',
     totalAscentM: route.totalAscentM ?? '',
-    difficulty: route.difficulty || ''
+    difficulty: route.difficulty || '',
+    // ✅ NOVÉ
+    gpxUrl: route.gpxUrl ?? '',
+    profileStepM: route.profileStepM ?? '',
+    profileEleM: (Array.isArray(route.profileEleM) && route.profileEleM.length) ? JSON.stringify(route.profileEleM) : ''
   });
 
   // Replace checkpoints
@@ -299,6 +383,11 @@ let data = loadData();
     if (!('totalAscentM' in r)) { r.totalAscentM = null; changed = true; }
     if (!Array.isArray(r.profile)) { r.profile = []; changed = true; }
     if (!Array.isArray(r.checkpoints)) { r.checkpoints = []; changed = true; }
+
+    // ✅ NOVÉ: kompatibilita pro staré lokální záznamy
+    if (!('gpxUrl' in r)) { r.gpxUrl = null; changed = true; }
+    if (!('profileStepM' in r)) { r.profileStepM = null; changed = true; }
+    if (!('profileEleM' in r)) { r.profileEleM = []; changed = true; }
   }
   if (changed) saveData();
 })();
@@ -485,26 +574,194 @@ bindTapSelector('#btnSegmentLeaderboard', ()=>{
 });
 
 // ---------- Routes list ----------
-on('#btnCreateRoute', 'click', ()=>{
+
+// ✅ NOVÉ: načtení /Gpx/index.json a naplnění dropdownu
+async function loadGpxIndex(){
+  if (Array.isArray(state.gpxIndex) && state.gpxIndex.length) return state.gpxIndex;
+  const res = await fetch(GPX_INDEX_URL, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Nelze načíst /Gpx/index.json');
+  const json = await res.json();
+  if (!Array.isArray(json)) throw new Error('index.json musí být pole');
+  // normalize
+  state.gpxIndex = json.map(x=>({
+    file: String(x.file || '').trim(),
+    name: String(x.name || x.file || '').trim()
+  })).filter(x=>x.file);
+  return state.gpxIndex;
+}
+
+function resetCreateRouteComputedUI(){
+  state.newRouteComputed = null;
+  state.newRouteSelectedFile = null;
+  const d1 = $('#newRouteDistanceAuto'); if (d1) d1.value = '';
+  const a1 = $('#newRouteAscentAuto'); if (a1) a1.value = '';
+  const hiddenDist = $('#newRouteDistance'); if (hiddenDist) hiddenDist.value = '';
+}
+
+async function fillCreateRouteGpxDropdown(){
+  const sel = $('#newRouteGpx');
+  if (!sel) return; // HTML nemusí být ještě upravené
+
+  sel.innerHTML = `<option value="">Načítám seznam…</option>`;
+  try{
+    const list = await loadGpxIndex();
+    if (!list.length){
+      sel.innerHTML = `<option value="">Žádné GPX v /Gpx/</option>`;
+      return;
+    }
+    sel.innerHTML = `<option value="">— Vyber GPX —</option>` + list.map(x=>{
+      return `<option value="${escapeHtml(x.file)}">${escapeHtml(x.name)}</option>`;
+    }).join('');
+  }catch(e){
+    console.warn(e);
+    sel.innerHTML = `<option value="">Nelze načíst seznam GPX</option>`;
+  }
+}
+
+// ✅ NOVÉ: po výběru GPX spočítat parametry a ukázat v modalu
+async function computeAndPreviewNewRouteFromSelectedGpx(){
+  const sel = $('#newRouteGpx');
+  if (!sel) return;
+  const file = (sel.value || '').trim();
+  state.newRouteSelectedFile = file || null;
+  resetCreateRouteComputedUI();
+  if (!file) return;
+
+  const gpxUrl = GPX_BASE_PATH + file;
+
+  showToast('Načítám GPX a počítám profil…', 1600);
+
+  try{
+    const res = await fetch(gpxUrl, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`Nelze načíst ${gpxUrl}`);
+    const text = await res.text();
+
+    const parsed = parseGpx(text); // {totalDistanceKm,totalAscentM,profile}
+    const stepM = DEFAULT_PROFILE_STEP_M;
+
+    // resample elevace do profileEleM
+    const profileEleM = resampleProfileEleMFromParsedProfile(parsed.profile, parsed.totalDistanceKm, stepM);
+
+    // UI profile points (pro canvas) – z resampled pole
+    const profilePoints = buildProfilePointsFromStepEle(parsed.totalDistanceKm, stepM, profileEleM);
+    const uiProfile = downsampleProfile(profilePoints, PROFILE_MAX_POINTS_UI);
+
+    state.newRouteComputed = {
+      gpxUrl,
+      totalDistanceKm: round2(parsed.totalDistanceKm),
+      totalAscentM: Math.round(parsed.totalAscentM),
+      profileStepM: stepM,
+      profileEleM: profileEleM,
+      profilePoints: uiProfile
+    };
+
+    // vyplň náhledy v modalu
+    const d1 = $('#newRouteDistanceAuto'); if (d1) d1.value = String(round2(parsed.totalDistanceKm)).replace('.',',');
+    const a1 = $('#newRouteAscentAuto'); if (a1) a1.value = String(Math.round(parsed.totalAscentM));
+
+    // kompatibilita se starým polem, pokud někde čteš #newRouteDistance
+    const hiddenDist = $('#newRouteDistance'); if (hiddenDist) hiddenDist.value = String(round2(parsed.totalDistanceKm));
+
+    showToast('GPX připraveno ✅', 1200);
+  }catch(e){
+    console.error(e);
+    showToast('Nepodařilo se načíst / spočítat GPX', 2200);
+    resetCreateRouteComputedUI();
+  }
+}
+
+// ✅ NOVÉ: resample z parsed.profile ({distanceKm,elevationM} v trackpointech) na pravidelný krok stepM -> profileEleM[]
+function resampleProfileEleMFromParsedProfile(parsedProfile, totalDistanceKm, stepM){
+  if (!Array.isArray(parsedProfile) || parsedProfile.length < 2) return [];
+  const totalM = Math.max(1, Math.round((Number.isFinite(totalDistanceKm) ? totalDistanceKm : parsedProfile[parsedProfile.length-1].distanceKm) * 1000));
+  const step = Math.max(1, Math.round(stepM));
+
+  // připrav pole vzdáleností v metrech pro rychlou interpolaci
+  const distM = parsedProfile.map(p=>Math.round((p.distanceKm || 0) * 1000));
+  const eleM  = parsedProfile.map(p=>Number(p.elevationM || 0));
+
+  function interpEleAtM(targetM){
+    if (targetM <= distM[0]) return eleM[0];
+    if (targetM >= distM[distM.length-1]) return eleM[eleM.length-1];
+
+    // binární vyhledání
+    let lo = 0, hi = distM.length - 1;
+    while (hi - lo > 1){
+      const mid = (lo + hi) >> 1;
+      if (distM[mid] <= targetM) lo = mid;
+      else hi = mid;
+    }
+    const d0 = distM[lo], d1 = distM[hi];
+    const e0 = eleM[lo],  e1 = eleM[hi];
+    const t = (targetM - d0) / Math.max(1e-9, (d1 - d0));
+    return e0 + (e1 - e0) * t;
+  }
+
+  const out = [];
+  for (let m=0; m<=totalM; m+=step){
+    out.push(Number(interpEleAtM(m).toFixed(2)));
+  }
+  // dorovnej poslední bod přesně na totalM (pokud nevychází)
+  const lastM = (out.length - 1) * step;
+  if (lastM < totalM){
+    out.push(Number(interpEleAtM(totalM).toFixed(2)));
+  }
+  return out;
+}
+
+on('#btnCreateRoute', 'click', async ()=>{
   $('#newRouteName').value = '';
   $('#newRouteDistance').value = '';
   $('#newRouteSource').value = state.source || 'Zwift';
+
+  resetCreateRouteComputedUI();
+  await fillCreateRouteGpxDropdown();
+  // bind onchange jednou (bez duplicit)
+  const sel = $('#newRouteGpx');
+  if (sel && !sel.dataset.bound){
+    sel.dataset.bound = '1';
+    sel.addEventListener('change', ()=>{ computeAndPreviewNewRouteFromSelectedGpx().catch(()=>{}); });
+  }
+
   openModal('modalCreateRoute');
 });
+
 on('#btnCreateRouteConfirm', 'click', async ()=>{
   const name = $('#newRouteName').value.trim();
   if (!name) return alert('Zadej název tratě.');
-  const dist = parseFloat(String($('#newRouteDistance').value).replace(',','.'));
+
   const source = ($('#newRouteSource')?.value) || state.source || 'Zwift';
+
+  // ✅ NOVÉ: vyžadujeme GPX (protože chceš všechno automaticky)
+  const gpxFile = ($('#newRouteGpx')?.value || '').trim();
+  if (!gpxFile){
+    return alert('Vyber GPX soubor v dropdownu.');
+  }
+
+  // pokud ještě není spočítáno (např. uživatel rychle klikl), dopočítej
+  if (!state.newRouteComputed || state.newRouteSelectedFile !== gpxFile){
+    await computeAndPreviewNewRouteFromSelectedGpx();
+  }
+  if (!state.newRouteComputed){
+    return alert('Nepodařilo se spočítat parametry z GPX. Zkus vybrat GPX znovu.');
+  }
+
+  const computed = state.newRouteComputed;
 
   const route = {
     id: uid(),
     source,
     name,
-    totalDistanceKm: Number.isFinite(dist) ? dist : null,
-    totalAscentM: null,
+    totalDistanceKm: Number.isFinite(computed.totalDistanceKm) ? computed.totalDistanceKm : null,
+    totalAscentM: Number.isFinite(computed.totalAscentM) ? computed.totalAscentM : null,
+    difficulty: '',
     checkpoints: [],
-    profile: []
+    profile: Array.isArray(computed.profilePoints) ? computed.profilePoints : [],
+
+    // ✅ NOVÉ: ukládáme i do lokální cache
+    gpxUrl: computed.gpxUrl || (GPX_BASE_PATH + gpxFile),
+    profileStepM: computed.profileStepM || DEFAULT_PROFILE_STEP_M,
+    profileEleM: Array.isArray(computed.profileEleM) ? computed.profileEleM : []
   };
 
   // Optimistic UI update
@@ -521,7 +778,11 @@ on('#btnCreateRouteConfirm', 'click', async ()=>{
       name: route.name,
       totalDistanceKm: route.totalDistanceKm ?? '',
       totalAscentM: route.totalAscentM ?? '',
-      difficulty: route.difficulty || ''
+      difficulty: route.difficulty || '',
+      // ✅ NOVÉ
+      gpxUrl: route.gpxUrl ?? '',
+      profileStepM: route.profileStepM ?? '',
+      profileEleM: (Array.isArray(route.profileEleM) && route.profileEleM.length) ? JSON.stringify(route.profileEleM) : ''
     });
     await sheetsJsonp('replaceCheckpoints', {
       routeId: route.id,
@@ -732,14 +993,6 @@ function renderRouteDetail(){
   }
 }
 
-
-// --- zbytek tvého souboru pokračuje BEZE ZMĚN ---
-// (zde je to už extrémně dlouhé; pokud chceš, pošlu ti druhou polovinu jako „Part 2“,
-// ale já ti ji klidně doplním celou i tady – jen mi napiš „pošli celý app.js celý komplet“.)
-//
-
-
-
 on('#btnAddCheckpoint', 'click', ()=>{
   $('#cpName').value = '';
   $('#cpDistance').value = '';
@@ -769,7 +1022,13 @@ on('#fileGpx', 'change', async (e)=>{
     const parsed = parseGpx(text);
     const route = getCurrentRoute(); if (!route) return;
 
-    route.profile = downsampleProfile(parsed.profile, 350);
+    // ✅ NOVÉ: při ručním importu do existující tratě taky uložíme gpx parametry (ale bez gpxUrl)
+    const stepM = DEFAULT_PROFILE_STEP_M;
+    const profileEleM = resampleProfileEleMFromParsedProfile(parsed.profile, parsed.totalDistanceKm, stepM);
+    route.profileStepM = stepM;
+    route.profileEleM = profileEleM;
+
+    route.profile = downsampleProfile(buildProfilePointsFromStepEle(parsed.totalDistanceKm, stepM, profileEleM), PROFILE_MAX_POINTS_UI);
     route.totalDistanceKm = round2(parsed.totalDistanceKm);
     route.totalAscentM = Math.round(parsed.totalAscentM);
 
@@ -786,6 +1045,22 @@ on('#fileGpx', 'change', async (e)=>{
     closeModal('modalImportGpx');
     renderRouteDetail();
     alert('GPX import hotový ✅');
+
+    // ✅ NOVÉ: pokus o uložení změn do DB (pokud existuje route v DB)
+    try{
+      await sheetsJsonp('upsertRoute', {
+        routeId: route.id,
+        source: route.source,
+        name: route.name,
+        totalDistanceKm: route.totalDistanceKm ?? '',
+        totalAscentM: route.totalAscentM ?? '',
+        difficulty: route.difficulty || '',
+        gpxUrl: route.gpxUrl ?? '',
+        profileStepM: route.profileStepM ?? '',
+        profileEleM: (Array.isArray(route.profileEleM) && route.profileEleM.length) ? JSON.stringify(route.profileEleM) : ''
+      });
+      await refreshFromSheets(state.source);
+    }catch(_){}
   }catch(err){
     console.error(err);
     alert('Nepodařilo se importovat GPX. Zkus jiný soubor.');
@@ -828,7 +1103,11 @@ on('#btnEditRouteSave', 'click', async ()=>{
       name: route.name,
       totalDistanceKm: route.totalDistanceKm ?? '',
       totalAscentM: route.totalAscentM ?? '',
-      difficulty: route.difficulty || ''
+      difficulty: route.difficulty || '',
+      // ✅ NOVÉ
+      gpxUrl: route.gpxUrl ?? '',
+      profileStepM: route.profileStepM ?? '',
+      profileEleM: (Array.isArray(route.profileEleM) && route.profileEleM.length) ? JSON.stringify(route.profileEleM) : ''
     });
     await sheetsJsonp('replaceCheckpoints', {
       routeId: route.id,
@@ -1801,7 +2080,7 @@ function drawProfile(route){
   const pts = route.profile;
   const maxD = pts[pts.length-1].distanceKm;
   let minE = Infinity, maxE = -Infinity;
-  for (const p of pts){ minE = Math.min(minE, p.elevationM); maxE = Math.max(maxE, p.elevationM); }
+  for (const p of pts){ minE = Math.min(minE,p.elevationM); maxE = Math.max(maxE,p.elevationM); }
   if (minE === maxE){ maxE += 1; }
 
   const pad = {l:40, r:12, t:10, b:26};
@@ -1982,11 +2261,18 @@ function showToast(html, ms=2200){
 }
 
 // ---------- Safety: escape HTML ----------
-
 function escapeHtml(s){
   return String(s).replace(/[&<>"']/g, (c)=>({
     '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
   }[c]));
+}
+
+// ✅ FIX: v kódu se volá stopTicker(), ale nebyl definovaný – přidávám bezpečný no-op
+function stopTicker(){
+  try{
+    if (raf) cancelAnimationFrame(raf);
+    raf = null;
+  }catch(e){}
 }
 
 // Initial render
